@@ -1,0 +1,51 @@
+/**
+ * /pause_then_check
+ *
+ * INVOCATION:  Twilio Voice webhook (POST) – typically from Studio TwiML Redirect
+ * RETURNS:     TwiML  →  callback(null, twiml)
+ *
+ * PURPOSE:
+ *   Insert a configurable pause into the caller's voice leg.
+ *   Studio uses this to wait N seconds before calling /check_conference again.
+ *   (Studio loops: pause → check → pause → check …)
+ *
+ * EXPECTED event params (POST body / query params):
+ *   conferenceName  – for correlation logging
+ *   seconds         – pause duration (default 5, clamped 1–30)
+ *   attempt         – which polling attempt this is (for logging)
+ */
+exports.handler = function (context, event, callback) {
+  // ── Correlation & logging ──────────────────────────────────────────
+  var requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  var conferenceName = (event.conferenceName || '').trim();
+  var rawSeconds = parseInt(event.seconds || '5', 10);
+  var safePause = Math.max(1, Math.min(isNaN(rawSeconds) ? 5 : rawSeconds, 30));
+  var attempt = (event.attempt || '0').trim();
+  var correlation = { requestId: requestId, conferenceName: conferenceName };
+  var FN = 'pause_then_check';
+
+  function log(level, step, extra) {
+    console.log(JSON.stringify(
+      Object.assign({ level: level, fn: FN, step: step }, correlation, extra || {}, { ts: new Date().toISOString() })
+    ));
+  }
+
+  log('info', 'START', { source: 'voice_webhook', seconds: safePause, attempt: attempt });
+
+  var twiml = new Twilio.twiml.VoiceResponse();
+
+  // ── Validate ───────────────────────────────────────────────────────
+  if (!conferenceName) {
+    log('warn', 'MISSING_PARAM', { missing: 'conferenceName' });
+    twiml.say('Missing conference name.');
+    twiml.hangup();
+    log('info', 'END', { outcome: 'error_missing_param' });
+    return callback(null, twiml);
+  }
+
+  // ── Pause ──────────────────────────────────────────────────────────
+  twiml.pause({ length: safePause });
+
+  log('info', 'END', { outcome: 'paused', pauseSeconds: safePause, attempt: attempt });
+  return callback(null, twiml);
+};

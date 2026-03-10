@@ -1,0 +1,16 @@
+{
+  "name": "tradersutopia-inboundcall-workflow",
+  "version": "1.0.0",
+  "description": "Traders Utopia inbound call workflow — Twilio Functions for simultaneous agent ringing",
+  "main": "simulring_agents.js",
+  "scripts": {
+    "test": "node test_harness.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "twilio": "^5.12.1"
+  }
+}
