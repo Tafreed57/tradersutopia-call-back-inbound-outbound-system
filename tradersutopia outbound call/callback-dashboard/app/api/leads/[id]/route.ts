@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateLead, appendLog, ensureSheetsReady } from "@/lib/sheets";
 import { withRetry } from "@/lib/retry";
+import { validateAccessCode } from "@/lib/access";
 import { v4 as uuidv4 } from "uuid";
 
 export const runtime = "nodejs";
@@ -16,19 +17,20 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await ensureSheetsReady();
-
     const { id } = await params;
     const body = await req.json();
     const { status, notes, accessCode } = body;
 
     // Auth check
-    if (accessCode !== process.env.AFFILIATE_ACCESS_CODE) {
+    const auth = validateAccessCode(accessCode);
+    if (!auth.ok) {
       return NextResponse.json(
-        { ok: false, error: "Invalid access code" },
-        { status: 401 }
+        { ok: false, error: auth.error },
+        { status: auth.status }
       );
     }
+
+    await ensureSheetsReady();
 
     if (!status && notes === undefined) {
       return NextResponse.json(

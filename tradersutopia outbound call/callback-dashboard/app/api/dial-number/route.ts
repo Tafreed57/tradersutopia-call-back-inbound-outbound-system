@@ -7,6 +7,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { startBridgeCall, isE164 } from "@/lib/twilio";
 import { isEmergencyNumber } from "@/lib/emergency";
+import { validateAccessCode } from "@/lib/access";
+import { getPublicBaseUrl, isLocalBaseUrl } from "@/lib/base-url";
 
 export const runtime = "nodejs";
 
@@ -15,10 +17,11 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { affiliatePhone, leadPhone, accessCode } = body;
 
-    if (accessCode !== process.env.AFFILIATE_ACCESS_CODE) {
+    const auth = validateAccessCode(accessCode);
+    if (!auth.ok) {
       return NextResponse.json(
-        { ok: false, error: "Invalid access code" },
-        { status: 401 }
+        { ok: false, error: auth.error },
+        { status: auth.status }
       );
     }
 
@@ -65,12 +68,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { getPublicBaseUrl } = await import("@/lib/base-url");
     const publicBaseUrl = getPublicBaseUrl(req.headers.get("host"));
 
     console.log("[dial-number] PUBLIC_BASE_URL:", publicBaseUrl ? `${publicBaseUrl.slice(0, 40)}...` : "(not set)");
 
-    if (!publicBaseUrl || publicBaseUrl.includes("localhost")) {
+    if (!publicBaseUrl || isLocalBaseUrl(publicBaseUrl)) {
       return NextResponse.json(
         {
           ok: false,
@@ -89,7 +91,11 @@ export async function POST(req: NextRequest) {
     });
 
     console.log(`[dial-number] Manual dial: ${affiliatePhone} → ${normalizedLead}`);
-    return NextResponse.json({ ok: true, callSid });
+    return NextResponse.json({
+      ok: true,
+      callSid,
+      message: "Calling your phone first. Pick up to connect the number.",
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[POST /api/dial-number] Error:", message);

@@ -19,6 +19,7 @@ import {
   type LiveCall,
 } from "@/lib/sheets";
 import { withRetry } from "@/lib/retry";
+import { validateAccessCode } from "@/lib/access";
 import webpush from "web-push";
 
 export const runtime = "nodejs";
@@ -141,12 +142,22 @@ async function sendPushForNewCalls(liveCalls: LiveCall[]): Promise<void> {
 
 export async function GET(req: NextRequest) {
   try {
-    await ensureSheetsReady();
-
     const status = (req.nextUrl.searchParams.get("status") || "LIVE") as
       | "LIVE"
       | "ENDED"
       | "all";
+    const auth = validateAccessCode(
+      req.nextUrl.searchParams.get("accessCode") || req.headers.get("x-access-code")
+    );
+
+    if (!auth.ok) {
+      return NextResponse.json(
+        { ok: false, error: auth.error },
+        { status: auth.status }
+      );
+    }
+
+    await ensureSheetsReady();
 
     const calls = await withRetry(() => getLiveCalls({ status }));
 

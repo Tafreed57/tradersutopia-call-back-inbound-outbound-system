@@ -6,11 +6,14 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { buildBridgeTwiml, buildErrorTwiml, isE164 } from "@/lib/twilio";
+import { getPublicBaseUrl } from "@/lib/base-url";
 
 export const runtime = "nodejs";
 
 function handleBridge(req: NextRequest) {
   const leadPhone = req.nextUrl.searchParams.get("lead") || "";
+  const leadId = req.nextUrl.searchParams.get("leadId") || "manual";
+  const affiliatePhone = req.nextUrl.searchParams.get("affiliatePhone") || "";
   const fullUrl = req.nextUrl.toString();
 
   console.log(`[bridge] lead=${leadPhone}, url=${fullUrl}`);
@@ -24,7 +27,11 @@ function handleBridge(req: NextRequest) {
     });
   }
 
-  const xml = buildBridgeTwiml(leadPhone);
+  const xml = buildBridgeTwiml(leadPhone, {
+    publicBaseUrl: getPublicBaseUrl(req.headers.get("host")),
+    leadId,
+    affiliatePhone,
+  });
   return new NextResponse(xml, {
     status: 200,
     headers: { "Content-Type": "text/xml" },

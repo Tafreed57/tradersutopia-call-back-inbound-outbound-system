@@ -5,6 +5,13 @@
 
 import twilio from "twilio";
 
+const OUTBOUND_STATUS_EVENTS: Array<"initiated" | "ringing" | "answered" | "completed"> = [
+  "initiated",
+  "ringing",
+  "answered",
+  "completed",
+];
+
 function getClient() {
   const sid = process.env.TWILIO_SID;
   const auth = process.env.TWILIO_AUTH;
@@ -16,6 +23,17 @@ function getTwilioNumber(): string {
   const num = process.env.TWILIO_NUMBER;
   if (!num) throw new Error("Missing TWILIO_NUMBER");
   return num;
+}
+
+function statusCallbackUrl(
+  publicBaseUrl: string,
+  params: Record<string, string>
+): string {
+  const url = new URL(`${publicBaseUrl.replace(/\/+$/, "")}/api/twilio-status`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value) url.searchParams.set(key, value);
+  }
+  return url.toString();
 }
 
 /**
@@ -38,12 +56,21 @@ export async function startBridgeCall(opts: {
   )}&leadId=${encodeURIComponent(opts.leadId || "manual")}&affiliatePhone=${encodeURIComponent(
     opts.affiliatePhone
   )}`;
+  const affiliateStatusUrl = statusCallbackUrl(opts.publicBaseUrl, {
+    leg: "affiliate",
+    leadId: opts.leadId || "manual",
+    affiliatePhone: opts.affiliatePhone,
+    lead: opts.leadPhone,
+  });
 
   const call = await client.calls.create({
     to: opts.affiliatePhone,
     from: twilioNumber,
     url: bridgeUrl,
     method: "POST",
+    statusCallback: affiliateStatusUrl,
+    statusCallbackEvent: OUTBOUND_STATUS_EVENTS,
+    statusCallbackMethod: "POST",
   });
 
   return { callSid: call.sid };
@@ -52,14 +79,40 @@ export async function startBridgeCall(opts: {
 /**
  * Generate TwiML for the bridge endpoint.
  */
-export function buildBridgeTwiml(leadPhone: string): string {
+export function buildBridgeTwiml(
+  leadPhone: string,
+  opts?: {
+    publicBaseUrl?: string;
+    leadId?: string;
+    affiliatePhone?: string;
+  }
+): string {
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
   const twilioNumber = getTwilioNumber();
 
   twiml.say({ voice: "alice", language: "en-US" }, "Connecting you to your callback.");
-  const dial = twiml.dial({ callerId: twilioNumber });
-  dial.number(leadPhone);
+  const dial = twiml.dial({ callerId: twilioNumber, answerOnBridge: true });
+
+  if (opts?.publicBaseUrl) {
+    const leadStatusUrl = statusCallbackUrl(opts.publicBaseUrl, {
+      leg: "lead",
+      leadId: opts.leadId || "manual",
+      affiliatePhone: opts.affiliatePhone || "",
+      lead: leadPhone,
+    });
+
+    dial.number(
+      {
+        statusCallback: leadStatusUrl,
+        statusCallbackEvent: OUTBOUND_STATUS_EVENTS,
+        statusCallbackMethod: "POST",
+      },
+      leadPhone
+    );
+  } else {
+    dial.number(leadPhone);
+  }
 
   return twiml.toString();
 }

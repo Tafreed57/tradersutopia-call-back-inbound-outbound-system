@@ -8,24 +8,27 @@ import { NextRequest, NextResponse } from "next/server";
 import { getLeadById, appendLog, ensureSheetsReady } from "@/lib/sheets";
 import { startBridgeCall, isE164 } from "@/lib/twilio";
 import { isEmergencyNumber } from "@/lib/emergency";
+import { validateAccessCode } from "@/lib/access";
+import { getPublicBaseUrl, isLocalBaseUrl } from "@/lib/base-url";
 import { v4 as uuidv4 } from "uuid";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   try {
-    await ensureSheetsReady();
-
     const body = await req.json();
     const { leadId, affiliatePhone, accessCode } = body;
 
     // ── Auth ──
-    if (accessCode !== process.env.AFFILIATE_ACCESS_CODE) {
+    const auth = validateAccessCode(accessCode);
+    if (!auth.ok) {
       return NextResponse.json(
-        { ok: false, error: "Invalid access code" },
-        { status: 401 }
+        { ok: false, error: auth.error },
+        { status: auth.status }
       );
     }
+
+    await ensureSheetsReady();
 
     // ── Validate ──
     if (!leadId || !affiliatePhone) {
@@ -66,11 +69,10 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Determine public base URL ──
-    const { getPublicBaseUrl } = await import("@/lib/base-url");
     const publicBaseUrl = getPublicBaseUrl(req.headers.get("host"));
     console.log(`[start-call] publicBaseUrl=${publicBaseUrl}, VERCEL_URL=${process.env.VERCEL_URL || "(not set)"}, host=${req.headers.get("host")}`);
 
-    if (!publicBaseUrl || publicBaseUrl.includes("localhost")) {
+    if (!publicBaseUrl || isLocalBaseUrl(publicBaseUrl)) {
       return NextResponse.json(
         {
           ok: false,
@@ -103,7 +105,11 @@ export async function POST(req: NextRequest) {
       twilioCallSid: callSid,
     });
 
-    return NextResponse.json({ ok: true, callSid });
+    return NextResponse.json({
+      ok: true,
+      callSid,
+      message: "Calling your phone first. Pick up to connect the lead.",
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[POST /api/start-call] Error:", message);

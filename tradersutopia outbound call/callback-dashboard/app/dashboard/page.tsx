@@ -32,6 +32,7 @@ export default function DashboardPage() {
   const [accessCode, setAccessCode] = useState("");
   const [isAuth, setIsAuth] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
 
   // Affiliate phone
   const [affiliatePhone, setAffiliatePhone] = useState("");
@@ -66,20 +67,63 @@ export default function DashboardPage() {
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
 
+  const getStoredAccessCode = useCallback(() => {
+    return localStorage.getItem("cb_code") || accessCode.trim();
+  }, [accessCode]);
+
+  const resetAuth = useCallback((message = "Invalid access code. Please log in again.") => {
+    localStorage.removeItem("cb_auth");
+    localStorage.removeItem("cb_code");
+    setIsAuth(false);
+    setAuthError(message);
+  }, []);
+
+  const validateCode = useCallback(async (code: string) => {
+    const res = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accessCode: code }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return {
+      ok: res.ok && data.ok,
+      error: data.error || "Unable to validate access code.",
+    };
+  }, []);
+
   // ── Restore from localStorage ───────────────────────────────────────────────
   useEffect(() => {
-    const savedAuth = localStorage.getItem("cb_auth");
-    const savedCode = localStorage.getItem("cb_code");
-    const savedPhone = localStorage.getItem("cb_phone");
-    if (savedAuth === "true" && savedCode) {
-      setAccessCode(savedCode);
-      setIsAuth(true);
+    let cancelled = false;
+
+    async function restoreSession() {
+      const savedAuth = localStorage.getItem("cb_auth");
+      const savedCode = localStorage.getItem("cb_code");
+      const savedPhone = localStorage.getItem("cb_phone");
+
+      if (savedPhone) {
+        setAffiliatePhone(savedPhone);
+        setPhoneSet(true);
+      }
+
+      if (savedAuth === "true" && savedCode) {
+        setAccessCode(savedCode);
+        const result = await validateCode(savedCode);
+        if (cancelled) return;
+
+        if (result.ok) {
+          setIsAuth(true);
+          setAuthError("");
+        } else {
+          resetAuth(result.error);
+        }
+      }
     }
-    if (savedPhone) {
-      setAffiliatePhone(savedPhone);
-      setPhoneSet(true);
-    }
-  }, []);
+
+    restoreSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [resetAuth, validateCode]);
 
   // ── Service Worker + Push Notifications ────────────────────────────────────
   useEffect(() => {
@@ -151,14 +195,27 @@ export default function DashboardPage() {
   }
 
   // ── Login handler ───────────────────────────────────────────────────────────
-  function handleLogin() {
-    if (!accessCode.trim()) {
+  async function handleLogin() {
+    const code = accessCode.trim();
+    if (!code) {
       setAuthError("Enter the access code.");
       return;
     }
-    // We store the code and validate server-side on every action
+
+    setAuthBusy(true);
+    const result = await validateCode(code);
+    setAuthBusy(false);
+
+    if (!result.ok) {
+      localStorage.removeItem("cb_auth");
+      localStorage.removeItem("cb_code");
+      setAuthError(result.error);
+      return;
+    }
+
     localStorage.setItem("cb_auth", "true");
-    localStorage.setItem("cb_code", accessCode.trim());
+    localStorage.setItem("cb_code", code);
+    setAccessCode(code);
     setIsAuth(true);
     setAuthError("");
   }
@@ -195,21 +252,30 @@ export default function DashboardPage() {
         q: search,
         sort: "createdAt",
         order: sortOrder,
+        accessCode: getStoredAccessCode(),
       });
       const res = await fetch(`/api/leads?${params}&t=${Date.now()}`, {
         cache: "no-store",
       });
       const data = await res.json();
+      if (res.status === 401) {
+        resetAuth(data.error);
+        return;
+      }
       if (data.ok) setLeads(data.leads);
       else console.error("Fetch leads error:", data.error);
     } catch (err) {
       console.error("Fetch leads error:", err);
     }
     setLoading(false);
-  }, [statusFilter, search, sortOrder]);
+  }, [statusFilter, search, sortOrder, getStoredAccessCode, resetAuth]);
 
   useEffect(() => {
-    if (isAuth && phoneSet) fetchLeads();
+    if (!isAuth || !phoneSet) return;
+    const timer = window.setTimeout(() => {
+      void fetchLeads();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [isAuth, phoneSet, fetchLeads]);
 
   // Auto-refresh every 30s (Google Sheets API has a 60 reads/min quota)
@@ -222,18 +288,31 @@ export default function DashboardPage() {
   // ── Live Calls ─────────────────────────────────────────────────────────────
   const fetchLiveCalls = useCallback(async () => {
     try {
-      const res = await fetch("/api/live-calls?status=LIVE&t=" + Date.now(), {
+      const params = new URLSearchParams({
+        status: "LIVE",
+        accessCode: getStoredAccessCode(),
+        t: String(Date.now()),
+      });
+      const res = await fetch(`/api/live-calls?${params}`, {
         cache: "no-store",
       });
       const data = await res.json();
+      if (res.status === 401) {
+        resetAuth(data.error);
+        return;
+      }
       if (data.ok) setLiveCalls(data.calls);
     } catch (err) {
       console.error("Fetch live calls error:", err);
     }
-  }, []);
+  }, [getStoredAccessCode, resetAuth]);
 
   useEffect(() => {
-    if (isAuth && phoneSet) fetchLiveCalls();
+    if (!isAuth || !phoneSet) return;
+    const timer = window.setTimeout(() => {
+      void fetchLiveCalls();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [isAuth, phoneSet, fetchLiveCalls]);
 
   useEffect(() => {
@@ -254,12 +333,16 @@ export default function DashboardPage() {
         body: JSON.stringify({
           leadId: lead.id,
           affiliatePhone,
-          accessCode: localStorage.getItem("cb_code"),
+          accessCode: getStoredAccessCode(),
         }),
       });
       const data = await res.json();
+      if (res.status === 401) {
+        resetAuth(data.error);
+        return;
+      }
       if (data.ok) {
-        setActionMsg({ id: lead.id, msg: "Your phone is ringing! Mark as called when done.", type: "ok" });
+        setActionMsg({ id: lead.id, msg: data.message || "Calling your phone first. Pick up to connect the lead.", type: "ok" });
         setDialedLeads((prev) => new Set(prev).add(lead.id));
       } else {
         setActionMsg({ id: lead.id, msg: data.error, type: "err" });
@@ -287,12 +370,15 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           status: newStatus,
-          accessCode: localStorage.getItem("cb_code"),
+          accessCode: getStoredAccessCode(),
           affiliatePhone,
         }),
       });
       const data = await res.json();
-      if (data.ok) {
+      if (res.status === 401) {
+        setLeads(previousLeads);
+        resetAuth(data.error);
+      } else if (data.ok) {
         // Re-fetch from Sheets to confirm sync
         fetchLeads();
         setActionMsg({ id: lead.id, msg: `Marked ${newStatus}`, type: "ok" });
@@ -322,11 +408,15 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           notes,
-          accessCode: localStorage.getItem("cb_code"),
+          accessCode: getStoredAccessCode(),
           affiliatePhone,
         }),
       });
       const data = await res.json();
+      if (res.status === 401) {
+        resetAuth(data.error);
+        return;
+      }
       if (data.ok) {
         setActionMsg({ id: lead.id, msg: "Notes saved", type: "ok" });
         fetchLeads();
@@ -357,7 +447,7 @@ export default function DashboardPage() {
 
   // Normalize a phone number: 10 digits → +1XXXXXXXXXX, 11 starting with 1 → +1XXXXXXXXXX
   function normalizePhone(input: string): string {
-    let val = input.trim();
+    const val = input.trim();
     if (val.startsWith("+")) return val;
     const digits = val.replace(/\D/g, "");
     if (digits.length === 10) return `+1${digits}`;
@@ -387,12 +477,14 @@ export default function DashboardPage() {
         body: JSON.stringify({
           affiliatePhone,
           leadPhone: withPlus,
-          accessCode: localStorage.getItem("cb_code"),
+          accessCode: getStoredAccessCode(),
         }),
       });
       const data = await res.json();
-      if (data.ok) {
-        setManualMsg({ msg: "Your phone is ringing! Pick up to connect.", type: "ok" });
+      if (res.status === 401) {
+        resetAuth(data.error);
+      } else if (data.ok) {
+        setManualMsg({ msg: data.message || "Calling your phone first. Pick up to connect.", type: "ok" });
         setManualNumber("");
       } else {
         setManualMsg({ msg: data.error || "Failed to dial", type: "err" });
@@ -415,16 +507,19 @@ export default function DashboardPage() {
             type="password"
             value={accessCode}
             onChange={(e) => setAccessCode(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleLogin();
+            }}
             placeholder="Access code"
             className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white placeholder-slate-500 mb-3 focus:outline-none focus:border-blue-500"
           />
           {authError && <p className="text-red-400 text-sm mb-3">{authError}</p>}
           <button
             onClick={handleLogin}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition"
+            disabled={authBusy}
+            className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition"
           >
-            Log In
+            {authBusy ? "Checking..." : "Log In"}
           </button>
         </div>
       </div>
@@ -786,7 +881,10 @@ function LeadRow({
   const [notes, setNotes] = useState(lead.notes);
   const [editing, setEditing] = useState(false);
 
-  useEffect(() => setNotes(lead.notes), [lead.notes]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setNotes(lead.notes), 0);
+    return () => window.clearTimeout(timer);
+  }, [lead.notes]);
 
   return (
     <tr className="border-b border-slate-800/50 hover:bg-slate-900/50">
@@ -900,7 +998,10 @@ function LeadCard({
   const [notes, setNotes] = useState(lead.notes);
   const [editing, setEditing] = useState(false);
 
-  useEffect(() => setNotes(lead.notes), [lead.notes]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setNotes(lead.notes), 0);
+    return () => window.clearTimeout(timer);
+  }, [lead.notes]);
 
   return (
     <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">

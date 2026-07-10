@@ -16,18 +16,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLiveCalls, ensureSheetsReady } from "@/lib/sheets";
 import { withRetry } from "@/lib/retry";
+import { validateAccessCode } from "@/lib/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
-    await ensureSheetsReady();
-
     const status = (req.nextUrl.searchParams.get("status") || "LIVE") as
       | "LIVE"
       | "ENDED"
       | "all";
+    const auth = validateAccessCode(
+      req.nextUrl.searchParams.get("accessCode") || req.headers.get("x-access-code")
+    );
+
+    if (!auth.ok) {
+      return NextResponse.json(
+        { ok: false, error: auth.error },
+        { status: auth.status }
+      );
+    }
+
+    await ensureSheetsReady();
 
     const calls = await withRetry(() => getLiveCalls({ status }));
 

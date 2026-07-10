@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * Reads your downloaded Google service account JSON file
  * and prints it as ONE LINE so you can paste into .env.local
