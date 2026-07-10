@@ -5,6 +5,14 @@
  */
 
 import { google, sheets_v4 } from "googleapis";
+import {
+  dateSortValue,
+  isDateSortField,
+  normalizeDateValue,
+  sheetCellToString,
+} from "./dates";
+
+type SheetCell = string | number | boolean | null | undefined;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 function getAuth() {
@@ -57,21 +65,23 @@ const CALLBACK_HEADERS = [
 ];
 
 // Callback Queue columns: A=created_at, B=caller, C=tag, D=status, E=assigned_to, F=notes, G=call_sid, H=called_number, I=digits
-function queueRowToLead(row: string[], rowIndex: number): Lead {
-  const caller = (row[1] || "").trim();
+function queueRowToLead(row: SheetCell[], rowIndex: number, normalizeDates = false): Lead {
+  const caller = sheetCellToString(row[1]).trim();
   const phone = caller ? (caller.startsWith("+") ? caller : `+${caller}`) : "";
-  const status = (row[3] || "").trim().toUpperCase() === "NEW" ? "pending" : (row[3] || "pending").toLowerCase();
+  const rawStatus = sheetCellToString(row[3]).trim();
+  const createdAt = normalizeDates ? normalizeDateValue(row[0]) : sheetCellToString(row[0]);
+  const status = rawStatus.toUpperCase() === "NEW" ? "pending" : (rawStatus || "pending").toLowerCase();
   return {
-    id: (row[6] || `row-${rowIndex}`).trim() || `row-${rowIndex}`,
-    createdAt: row[0] || "",
-    name: row[2] ? `Lead (${row[2]})` : "Lead",
+    id: sheetCellToString(row[6]).trim() || `row-${rowIndex}`,
+    createdAt,
+    name: row[2] ? `Lead (${sheetCellToString(row[2])})` : "Lead",
     phone,
-    reason: row[2] || "",
+    reason: sheetCellToString(row[2]),
     status,
     calledAt: "",
-    calledBy: row[4] || "",
-    notes: row[5] || "",
-    lastUpdatedAt: row[0] || "",
+    calledBy: sheetCellToString(row[4]),
+    notes: sheetCellToString(row[5]),
+    lastUpdatedAt: createdAt,
     _rowIndex: rowIndex,
   };
 }
@@ -187,18 +197,18 @@ export interface Lead {
   _rowIndex?: number; // 1-based sheet row (header=1, first data=2)
 }
 
-function rowToLead(row: string[], rowIndex: number): Lead {
+function rowToLead(row: SheetCell[], rowIndex: number, normalizeDates = false): Lead {
   return {
-    id: row[0] || "",
-    createdAt: row[1] || "",
-    name: row[2] || "",
-    phone: row[3] || "",
-    reason: row[4] || "",
-    status: row[5] || "pending",
-    calledAt: row[6] || "",
-    calledBy: row[7] || "",
-    notes: row[8] || "",
-    lastUpdatedAt: row[9] || "",
+    id: sheetCellToString(row[0]),
+    createdAt: normalizeDates ? normalizeDateValue(row[1]) : sheetCellToString(row[1]),
+    name: sheetCellToString(row[2]),
+    phone: sheetCellToString(row[3]),
+    reason: sheetCellToString(row[4]),
+    status: sheetCellToString(row[5]) || "pending",
+    calledAt: normalizeDates ? normalizeDateValue(row[6]) : sheetCellToString(row[6]),
+    calledBy: sheetCellToString(row[7]),
+    notes: sheetCellToString(row[8]),
+    lastUpdatedAt: normalizeDates ? normalizeDateValue(row[9]) : sheetCellToString(row[9]),
     _rowIndex: rowIndex,
   };
 }
@@ -234,12 +244,14 @@ export async function getLeads(opts?: {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range,
+    valueRenderOption: "UNFORMATTED_VALUE",
+    dateTimeRenderOption: "SERIAL_NUMBER",
   });
 
-  const rows = res.data.values || [];
+  const rows = (res.data.values || []) as SheetCell[][];
   let leads: Lead[] = useQueue
-    ? rows.map((row, i) => queueRowToLead(row, i + 2)).filter((l) => l.phone || l.id)
-    : rows.map((row, i) => rowToLead(row, i + 2));
+    ? rows.map((row, i) => queueRowToLead(row, i + 2, true)).filter((l) => l.phone || l.id)
+    : rows.map((row, i) => rowToLead(row, i + 2, true));
 
   // Filter by status
   if (opts?.status && opts.status !== "all") {
@@ -262,7 +274,9 @@ export async function getLeads(opts?: {
   leads.sort((a, b) => {
     const aVal = String((a as unknown as Record<string, string>)[sortField] || "");
     const bVal = String((b as unknown as Record<string, string>)[sortField] || "");
-    const cmp = aVal.localeCompare(bVal);
+    const aTime = isDateSortField(sortField) ? dateSortValue(aVal) : 0;
+    const bTime = isDateSortField(sortField) ? dateSortValue(bVal) : 0;
+    const cmp = aTime || bTime ? aTime - bTime : aVal.localeCompare(bVal);
     return order === "asc" ? cmp : -cmp;
   });
 

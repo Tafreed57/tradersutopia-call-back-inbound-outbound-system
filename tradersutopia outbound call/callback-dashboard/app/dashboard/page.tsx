@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { formatDateValue } from "@/lib/dates";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Lead {
@@ -1155,28 +1156,5 @@ function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
 }
 
 function formatDate(raw: string): string {
-  if (!raw) return "—";
-  try {
-    let d: Date;
-    // Handle DD/MM/YYYY HH:MM:SS format from Google Sheets
-    const ddmmMatch = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):?(\d{2})?/);
-    if (ddmmMatch) {
-      const [, day, month, year, hour, min, sec] = ddmmMatch;
-      d = new Date(
-        parseInt(year), parseInt(month) - 1, parseInt(day),
-        parseInt(hour), parseInt(min), parseInt(sec || "0")
-      );
-    } else {
-      d = new Date(raw);
-    }
-    if (isNaN(d.getTime())) return raw;
-    return d.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  } catch {
-    return raw;
-  }
+  return formatDateValue(raw);
 }
