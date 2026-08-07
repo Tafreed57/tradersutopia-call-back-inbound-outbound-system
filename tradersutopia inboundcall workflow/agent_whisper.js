@@ -26,6 +26,9 @@
  *   CallSid         – Twilio-injected SID of this agent leg
  *   Called / To      – the agent number that was dialed
  *   try             – retry counter (query param, default 0)
+ *   callerCallSid   – original inbound caller CallSid
+ *   callerNumber    – original inbound caller phone number
+ *   calledNumber    – Twilio number the caller dialed
  */
 exports.handler = function (context, event, callback) {
   var entryMs = Date.now();
@@ -53,9 +56,21 @@ exports.handler = function (context, event, callback) {
   var agentCallSid = (event.CallSid || '').trim();
   var agentNumber = (event.Called || event.To || '').trim();
   var tryCount = parseInt(event.try || event.Try || '0', 10) || 0;
+  var callerCallSid = (event.callerCallSid || event.callSid || '').trim();
+  var callerNumber = (event.callerNumber || event.CallerNumber || '').trim();
+  var calledNumber = (event.calledNumber || event.CalledNumber || '').trim();
   var MAX_TRIES = 2;
 
-  var correlation = { requestId: requestId, conferenceName: conferenceName, agentCallSid: agentCallSid, agentNumber: agentNumber, try: tryCount };
+  var correlation = {
+    requestId: requestId,
+    conferenceName: conferenceName,
+    agentCallSid: agentCallSid,
+    agentNumber: agentNumber,
+    try: tryCount,
+    callerCallSid: callerCallSid,
+    callerNumber: callerNumber,
+    calledNumber: calledNumber
+  };
 
   function log(level, step, extra) {
     console.log(JSON.stringify(
@@ -76,7 +91,11 @@ exports.handler = function (context, event, callback) {
 
   // Build action URL for Gather
   var baseUrl = (context.BASE_URL || ('https://' + context.DOMAIN_NAME)).replace(/\/+$/, '');
-  var acceptUrl = baseUrl + '/agent_whisper_accept?conferenceName=' + encodeURIComponent(conferenceName);
+  var acceptUrl = baseUrl + '/agent_whisper_accept'
+    + '?conferenceName=' + encodeURIComponent(conferenceName)
+    + '&callerCallSid=' + encodeURIComponent(callerCallSid)
+    + '&callerNumber=' + encodeURIComponent(callerNumber)
+    + '&calledNumber=' + encodeURIComponent(calledNumber);
 
   // Gather: press 1 to accept (barge-in enabled by default — digits during Say are captured)
   var gather = twiml.gather({
@@ -95,7 +114,12 @@ exports.handler = function (context, event, callback) {
 
   // No-input path: retry or hang up
   if (tryCount < MAX_TRIES) {
-    var retryUrl = baseUrl + '/agent_whisper?conferenceName=' + encodeURIComponent(conferenceName) + '&try=' + (tryCount + 1);
+    var retryUrl = baseUrl + '/agent_whisper'
+      + '?conferenceName=' + encodeURIComponent(conferenceName)
+      + '&callerCallSid=' + encodeURIComponent(callerCallSid)
+      + '&callerNumber=' + encodeURIComponent(callerNumber)
+      + '&calledNumber=' + encodeURIComponent(calledNumber)
+      + '&try=' + (tryCount + 1);
     twiml.say('No input received.');
     twiml.redirect({ method: 'POST' }, retryUrl);
   } else {

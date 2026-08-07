@@ -3,7 +3,7 @@
  *
  * Receives POST events from Twilio Functions:
  *   1. callback_requested  → appends row to "Callback Queue"
- *   2. agent_on_call       → appends LIVE row to "Live Calls"
+ *   2. agent_on_call       → appends LIVE row to "Live Calls" and marks caller called in "Callback Queue"
  *   3. agent_call_ended    → updates matching LIVE row to ENDED
  *
  * Deploy as Web App → Execute as: Me, Who has access: Anyone.
@@ -79,8 +79,8 @@ function doGet(e) {
  * callback_requested — caller requests a callback.
  *
  * Deduplication: if the same caller number already has a row, update it
- * in-place (reset status to NEW, refresh timestamp/callSid) rather than
- * appending a duplicate. The row keeps its existing notes and assigned_to.
+ * in-place rather than appending a duplicate. Callback requests reset to
+ * NEW/pending; agent-connected events can mark the row called.
  *
  * Columns: A=created_at, B=caller, C=tag, D=status, E=assigned_to,
  *          F=notes, G=call_sid, H=called_number, I=digits
@@ -97,12 +97,15 @@ function handleCallbackRequested(ss, data, tag) {
     const calledNumber = data.called_number || data.To || "";
     const callSid = data.call_sid || data.CallSid || "";
     const digits = data.digits || data.Digits || "";
+    const status = normalizeCallbackStatus_(data.callback_list_status || data.status || "NEW");
+    const assignedTo = data.assigned_to || data.agent || "";
+    const notes = data.notes || "";
 
     const normalize = (n) => String(n).trim().replace(/^\+/, "").replace(/\D/g, "");
     const incomingCaller = normalize(caller);
 
     if (!incomingCaller) {
-      sheet.appendRow([createdAt, caller, tag, "NEW", "", "", callSid, calledNumber, digits]);
+      sheet.appendRow([createdAt, caller, tag, status, assignedTo, notes, callSid, calledNumber, digits]);
       return;
     }
 
@@ -124,7 +127,9 @@ function handleCallbackRequested(ss, data, tag) {
       // Update existing row: refresh timestamp, status, call_sid — keep notes & assigned_to
       sheet.getRange(matchRow, 1).setValue(createdAt);        // A: created_at
       sheet.getRange(matchRow, 3).setValue(tag);               // C: tag
-      sheet.getRange(matchRow, 4).setValue("NEW");             // D: status → NEW
+      sheet.getRange(matchRow, 4).setValue(status);            // D: status
+      if (assignedTo) sheet.getRange(matchRow, 5).setValue(assignedTo); // E: assigned_to
+      if (notes) sheet.getRange(matchRow, 6).setValue(notes);            // F: notes
       sheet.getRange(matchRow, 7).setValue(callSid);           // G: call_sid
       sheet.getRange(matchRow, 8).setValue(calledNumber);      // H: called_number
       sheet.getRange(matchRow, 9).setValue(digits);            // I: digits
@@ -143,7 +148,7 @@ function handleCallbackRequested(ss, data, tag) {
       // New caller — insert at row 2 (top of data) instead of appending to bottom
       sheet.insertRowAfter(1);
       sheet.getRange(2, 1, 1, 9).setValues([
-        [createdAt, caller, tag, "NEW", "", "", callSid, calledNumber, digits]
+        [createdAt, caller, tag, status, assignedTo, notes, callSid, calledNumber, digits]
       ]);
       Logger.log("New callback from " + caller + " → inserted at top");
     }
@@ -182,6 +187,14 @@ function handleAgentOnCall(ss, data) {
     lock.releaseLock();
   }
 
+  // Also place this caller in Callback Queue history, even if they never requested a callback.
+  // Mark as "called" so it appears in history without creating pending follow-up work.
+  try {
+    logAgentConnectedInCallbackQueue_(ss, data);
+  } catch (queueErr) {
+    Logger.log("Callback Queue write for agent_on_call failed (non-fatal): " + queueErr);
+  }
+
   // Trigger push notification via Vercel (fire after sheet write, outside lock)
   try {
     UrlFetchApp.fetch(VERCEL_PUSH_URL, {
@@ -200,6 +213,24 @@ function handleAgentOnCall(ss, data) {
   } catch (pushErr) {
     Logger.log("Push trigger failed (non-fatal): " + pushErr);
   }
+}
+
+function logAgentConnectedInCallbackQueue_(ss, data) {
+  const caller = data.caller_number || data.caller || data.From || "";
+  if (!caller) {
+    Logger.log("Skipping Callback Queue history for agent_on_call: missing caller_number");
+    return;
+  }
+
+  handleCallbackRequested(ss, {
+    caller: caller,
+    called_number: data.called_number || data.calledNumber || data.To || "",
+    call_sid: data.caller_call_sid || data.call_sid || data.CallSid || "",
+    digits: data.callback_list_digits || "agent_pressed_1",
+    callback_list_status: data.callback_list_status || "called",
+    assigned_to: data.agent || "",
+    notes: data.callback_list_notes || ""
+  }, data.callback_list_tag || "agent_connected");
 }
 
 /**
@@ -333,6 +364,14 @@ function testPushTrigger() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+function normalizeCallbackStatus_(status) {
+  const raw = String(status || "").trim();
+  const lower = raw.toLowerCase();
+  if (!raw || lower === "new" || lower === "pending") return "NEW";
+  if (lower === "called") return "called";
+  return raw;
+}
 
 /**
  * Returns the named sheet, creating it with a bold header row if missing.

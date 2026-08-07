@@ -29,6 +29,27 @@ try {
 /* ──────────────────────────────────────────────────────────────────── */
 
 function createMockContext(overrides) {
+  function mockCalls(callSid) {
+    return {
+      fetch: function () {
+        console.log('    [MOCK] calls(' + callSid + ').fetch');
+        return Promise.resolve({ from: '+15551230000', to: '+18005551234' });
+      },
+      update: function (params) {
+        console.log('    [MOCK] calls(' + callSid + ').update -> status=' + params.status);
+        return Promise.resolve({});
+      }
+    };
+  }
+  mockCalls.create = function (params) {
+    console.log('    [MOCK] calls.create -> to=' + params.to + ', timeout=' + params.timeout + ', url=' + params.url);
+    return Promise.resolve({ sid: 'CAmock_' + params.to.replace(/\+/g, '') });
+  };
+  mockCalls.list = function (params) {
+    console.log('    [MOCK] calls.list -> status=' + params.status + ', from=' + params.from);
+    return Promise.resolve([]);
+  };
+
   var base = {
     DOMAIN_NAME: 'tu-voice-routing-3166.twil.io',
     FROM_NUMBER: '+18005551234',
@@ -36,16 +57,7 @@ function createMockContext(overrides) {
     BASE_URL: 'https://tu-voice-routing-3166.twil.io',
     getTwilioClient: function () {
       return {
-        calls: {
-          create: function (params) {
-            console.log('    [MOCK] calls.create -> to=' + params.to + ', timeout=' + params.timeout + ', machineDetection=' + params.machineDetection);
-            return Promise.resolve({ sid: 'CAmock_' + params.to.replace(/\+/g, '') });
-          },
-          list: function (params) {
-            console.log('    [MOCK] calls.list -> status=' + params.status + ', from=' + params.from);
-            return Promise.resolve([]);
-          }
-        },
+        calls: mockCalls,
         conferences: Object.assign(
           function (sid) {
             return {
@@ -166,7 +178,12 @@ async function main() {
   await runTest(
     'simulring_agents — happy path (Studio POST)',
     './simulring_agents',
-    { conferenceName: CONF, callSid: 'CAmockCaller001' }
+    {
+      conferenceName: CONF,
+      callSid: 'CAmockCaller001',
+      callerNumber: '+15551230000',
+      calledNumber: '+18005551234'
+    }
   );
   await runTest(
     'simulring_agents — missing conferenceName',
@@ -184,7 +201,15 @@ async function main() {
   await runTest(
     'agent_whisper — happy path (human answers)',
     './agent_whisper',
-    { conferenceName: CONF, CallSid: 'CAagent001', Called: '+14375505339', AnsweredBy: 'human' }
+    {
+      conferenceName: CONF,
+      CallSid: 'CAagent001',
+      Called: '+14375505339',
+      AnsweredBy: 'human',
+      callerCallSid: 'CAmockCaller001',
+      callerNumber: '+15551230000',
+      calledNumber: '+18005551234'
+    }
   );
   await runTest(
     'agent_whisper — machine_start (should HANGUP)',
@@ -225,6 +250,19 @@ async function main() {
   // ── agent_whisper_accept ───────────────────────────────────────────
   await runTest(
     'agent_whisper_accept — press 1 (accept)',
+    './agent_whisper_accept',
+    {
+      conferenceName: CONF,
+      Digits: '1',
+      CallSid: 'CAagent001',
+      Called: '+14375505339',
+      callerCallSid: 'CAmockCaller001',
+      callerNumber: '+15551230000',
+      calledNumber: '+18005551234'
+    }
+  );
+  await runTest(
+    'agent_whisper_accept — press 1 (accept, lookup caller by CallSid fallback)',
     './agent_whisper_accept',
     { conferenceName: CONF, Digits: '1', CallSid: 'CAagent001', Called: '+14375505339' }
   );

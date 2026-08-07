@@ -14,6 +14,8 @@
  *
  * OPTIONAL event params:
  *   callSid / CallSid – original caller's CallSid (for correlation)
+ *   callerNumber / From / Caller – original caller phone number
+ *   calledNumber / To / Called  – Twilio number the caller dialed
  *
  * REQUIRED env vars (context):
  *   FROM_NUMBER  – Twilio voice-capable number for caller-ID
@@ -53,8 +55,16 @@ exports.handler = async function (context, event, callback) {
   conferenceName = (conferenceName || '').trim();
   console.log("PARSED_conferenceName=" + conferenceName);
 
-  var callerCallSid = (event.callSid || event.CallSid || '').trim();
-  var correlation = { requestId: requestId, conferenceName: conferenceName, callerCallSid: callerCallSid };
+  var callerCallSid = (event.callerCallSid || event.callSid || event.CallSid || '').trim();
+  var callerNumber = (event.callerNumber || event.From || event.Caller || '').trim();
+  var calledNumber = (event.calledNumber || event.To || event.Called || '').trim();
+  var correlation = {
+    requestId: requestId,
+    conferenceName: conferenceName,
+    callerCallSid: callerCallSid,
+    callerNumber: callerNumber,
+    calledNumber: calledNumber
+  };
 
   function log(level, step, extra) {
     console.log(JSON.stringify(
@@ -64,7 +74,12 @@ exports.handler = async function (context, event, callback) {
 
   log('info', 'START', {
     source: 'studio_http_post',
-    rawParams: { conferenceName: event.conferenceName, callSid: event.callSid || event.CallSid },
+    rawParams: {
+      conferenceName: event.conferenceName,
+      callSid: event.callerCallSid || event.callSid || event.CallSid,
+      callerNumber: event.callerNumber || event.From || event.Caller,
+      calledNumber: event.calledNumber || event.To || event.Called
+    },
     eventKeys: Object.keys(event || {})
   });
 
@@ -98,7 +113,11 @@ exports.handler = async function (context, event, callback) {
 
   // ── Build whisper URL ──────────────────────────────────────────────
   var baseUrl = (context.BASE_URL || ('https://' + context.DOMAIN_NAME)).replace(/\/+$/, '');
-  var whisperUrl = baseUrl + '/agent_whisper?conferenceName=' + encodeURIComponent(conferenceName);
+  var whisperUrl = baseUrl + '/agent_whisper'
+    + '?conferenceName=' + encodeURIComponent(conferenceName)
+    + '&callerCallSid=' + encodeURIComponent(callerCallSid)
+    + '&callerNumber=' + encodeURIComponent(callerNumber)
+    + '&calledNumber=' + encodeURIComponent(calledNumber);
   log('info', 'CONFIG', { baseUrl: baseUrl, whisperUrl: whisperUrl, agentCount: AGENTS.length });
 
   // ── Atomic agent availability check ───────────────────────────────

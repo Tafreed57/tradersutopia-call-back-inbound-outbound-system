@@ -15,6 +15,9 @@
  *   Digits          – the key the agent pressed
  *   CallSid         – Twilio-injected SID of this agent leg
  *   Called / To      – the agent number
+ *   callerCallSid   – original inbound caller CallSid
+ *   callerNumber    – original inbound caller phone number
+ *   calledNumber    – Twilio number the caller dialed
  *
  * REQUIRED env vars:
  *   FROM_NUMBER     – needed to identify our outbound calls when cancelling others
@@ -50,11 +53,25 @@ exports.handler = async function (context, event, callback) {
   var digit = (event.Digits || event.digits || '').trim();
   var agentCallSid = (event.CallSid || '').trim();
   var agentNumber = (event.Called || event.To || '').trim();
+  var callerCallSid = (event.callerCallSid || event.callSid || '').trim();
+  if (!callerCallSid && conferenceName.indexOf('TU_') === 0) {
+    callerCallSid = conferenceName.replace(/^TU_/, '').split('_')[0];
+  }
+  var callerNumber = (event.callerNumber || event.CallerNumber || '').trim();
+  var calledNumber = (event.calledNumber || event.CalledNumber || '').trim();
 
   console.log("ACCEPT_PARSED_conferenceName=" + conferenceName);
   console.log("ACCEPT_DIGITS=" + digit);
 
-  var correlation = { requestId: requestId, conferenceName: conferenceName, agentCallSid: agentCallSid, agentNumber: agentNumber };
+  var correlation = {
+    requestId: requestId,
+    conferenceName: conferenceName,
+    agentCallSid: agentCallSid,
+    agentNumber: agentNumber,
+    callerCallSid: callerCallSid,
+    callerNumber: callerNumber,
+    calledNumber: calledNumber
+  };
 
   function log(level, step, extra) {
     console.log(JSON.stringify(
@@ -83,7 +100,12 @@ exports.handler = async function (context, event, callback) {
   if (digit !== '1') {
     log('info', 'WRONG_DIGIT', { digit: digit });
     var baseUrl = (context.BASE_URL || ('https://' + context.DOMAIN_NAME)).replace(/\/+$/, '');
-    var retryWhisperUrl = baseUrl + '/agent_whisper?conferenceName=' + encodeURIComponent(conferenceName) + '&try=1';
+    var retryWhisperUrl = baseUrl + '/agent_whisper'
+      + '?conferenceName=' + encodeURIComponent(conferenceName)
+      + '&callerCallSid=' + encodeURIComponent(callerCallSid)
+      + '&callerNumber=' + encodeURIComponent(callerNumber)
+      + '&calledNumber=' + encodeURIComponent(calledNumber)
+      + '&try=1';
     twiml.say('Invalid input.');
     twiml.redirect({ method: 'POST' }, retryWhisperUrl);
     log('info', 'END', { outcome: 'wrong_digit_retry', digit: digit });
@@ -97,6 +119,19 @@ exports.handler = async function (context, event, callback) {
   var client = context.getTwilioClient();
   var syncSid = (context.SYNC_SERVICE_SID || '').trim();
   var SYNC_MAP = 'call_routing';
+
+  if ((!callerNumber || !calledNumber) && callerCallSid) {
+    try {
+      var callerCall = await client.calls(callerCallSid).fetch();
+      if (!callerNumber) callerNumber = (callerCall.from || '').trim();
+      if (!calledNumber) calledNumber = (callerCall.to || '').trim();
+      correlation.callerNumber = callerNumber;
+      correlation.calledNumber = calledNumber;
+      log('info', 'CALLER_LOOKUP_OK', { callerCallSid: callerCallSid });
+    } catch (lookupErr) {
+      log('warn', 'CALLER_LOOKUP_FAILED', { callerCallSid: callerCallSid, message: lookupErr.message });
+    }
+  }
 
   // Try Sync first; if Sync fails, fall back to REST API (never skip cancellation)
   var cancelledViaSyncOk = false;
@@ -154,8 +189,6 @@ exports.handler = async function (context, event, callback) {
   if (callbackUrl) {
     try {
       var https = require('https');
-      var callerCallSid = conferenceName.replace(/^TU_/, '');
-      var callerNumber = (event.From || '').trim();
       var allAgents = (context.AGENT_LIST || '').split(',').map(function (n) { return n.trim(); }).filter(Boolean);
       var otherAgents = allAgents.filter(function (n) { return n !== agentNumber; });
 
@@ -166,6 +199,10 @@ exports.handler = async function (context, event, callback) {
         conference_name: conferenceName,
         caller_call_sid: callerCallSid,
         caller_number: callerNumber,
+        called_number: calledNumber,
+        callback_list_tag: 'agent_connected',
+        callback_list_status: 'called',
+        callback_list_digits: 'agent_pressed_1',
         timestamp: new Date().toISOString()
       });
 

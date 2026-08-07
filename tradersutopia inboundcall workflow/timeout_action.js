@@ -128,7 +128,11 @@ exports.handler = async function (context, event, callback) {
       return callback(null, twiml);
     }
 
-    var whisperUrl = baseUrl + '/agent_whisper?conferenceName=' + encodeURIComponent(newConferenceName);
+    var whisperUrl = baseUrl + '/agent_whisper'
+      + '?conferenceName=' + encodeURIComponent(newConferenceName)
+      + '&callerCallSid=' + encodeURIComponent(callSid)
+      + '&callerNumber=' + encodeURIComponent(callerNumber)
+      + '&calledNumber=' + encodeURIComponent(calledNumber);
     var client = context.getTwilioClient();
     var syncSid = (context.SYNC_SERVICE_SID || '').trim();
     var SYNC_MAP = 'call_routing';

@@ -10,7 +10,7 @@ This document describes how the system behaves end-to-end. Code implements this 
 2. Studio sets `conferenceName = TU_{CallSid}` and **HTTP POST** to `/simulring_agents`.
 3. Studio **TwiML Redirect** to `/join_conference` → caller is **parked in a conference**.
 4. While the caller hears “please hold” (from `waitUrl` → `/conference_wait`), **only available agents** are rung.
-5. When an agent **presses 1** → that agent **joins the conference** and we **stop ringing all other agents** for this call.
+5. When an agent **presses 1** → that agent **joins the conference**, we **stop ringing all other agents**, and the caller is written to callback history as `called` / `agent_connected`.
 6. If **no agent** joins before the wait timeout → conference is ended and caller gets the **post-conference menu** (callback / retry).
 
 ---
@@ -83,10 +83,10 @@ So: **all agents declining** or **no one answering** until timeout → caller hi
 
 - **simulring_agents** — Claims available agents (Sync or REST), creates outbound legs, stores conference call SIDs in Sync.
 - **agent_whisper** — Plays “Press 1 to accept”; on no input or non-1, hangs up **that agent only**.
-- **agent_whisper_accept** — On “1”: cancel other conference legs, join conference (`endConferenceOnExit: false`). On other digit: hang up that agent only.
+- **agent_whisper_accept** — On “1”: cancel other conference legs, post `agent_on_call` so the dashboard records a live call and callback-history row, then join conference (`endConferenceOnExit: false`). On other digit: hang up that agent only.
 - **join_conference** — Puts caller in conference; `waitUrl` = `/conference_wait` (hold loop then timeout).
 - **conference_wait** — Hold loop; on timeout, ends conference via API → caller gets post-Dial menu.
-- **timeout_action** — Handles post-conference digits (callback / retry).
+- **timeout_action** — Handles post-conference digits (callback / retry). Explicit caller callback requests stay `NEW`/pending.
 - **agent_call_status** — On terminal agent leg state, releases that agent from Sync.
 - **conference_status_callback** — On conference end, cleans up Sync (release agents, remove conference entry).
 
