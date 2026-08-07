@@ -200,9 +200,6 @@ exports.handler = async function (context, event, callback) {
         caller_call_sid: callerCallSid,
         caller_number: callerNumber,
         called_number: calledNumber,
-        callback_list_tag: 'agent_connected',
-        callback_list_status: 'called',
-        callback_list_digits: 'agent_pressed_1',
         timestamp: new Date().toISOString()
       });
 

@@ -59,7 +59,7 @@ Both systems use **Twilio Voice** for PSTN connectivity and are designed to be d
        →  Only available agents rung (Sync or REST)
        →  Agent answers  →  /agent_whisper (“Press 1 to accept”)
        →  Agent presses 1  →  /agent_whisper_accept  →  Join conference, cancel others
-       →  Timeout (no agent)  →  /conference_wait ends conference  →  Post-call menu
+       →  Timeout (no agent)  →  /conference_wait logs missed callback, ends conference  →  Post-call menu
 
                     ┌─────────────────────────────────────────────────────────┐
                     │                   OUTBOUND FLOW                         │

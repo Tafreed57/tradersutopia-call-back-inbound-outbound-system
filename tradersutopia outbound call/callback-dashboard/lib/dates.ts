@@ -2,6 +2,32 @@ type DateCell = string | number | boolean | null | undefined;
 
 const SHEETS_EPOCH_MS = Date.UTC(1899, 11, 30);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const MONTHS: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
 
 interface ParsedDate {
   isoLocal: string;
@@ -37,6 +63,7 @@ export function formatDateValue(value: DateCell): string {
   if (Number.isNaN(date.getTime())) return parsed.isoLocal;
 
   const options: Intl.DateTimeFormatOptions = {
+    year: "numeric",
     month: "short",
     day: "numeric",
   };
@@ -66,14 +93,14 @@ function parseDateValue(value: DateCell): ParsedDate | null {
   );
   if (dmy) {
     const [, first, second, yearRaw, hourRaw, minuteRaw, secondRaw, meridiem] = dmy;
-    let day = Number(first);
-    let month = Number(second);
     const firstNum = Number(first);
     const secondNum = Number(second);
+    let month = firstNum;
+    let day = secondNum;
 
-    if (secondNum > 12 && firstNum <= 12) {
-      day = secondNum;
-      month = firstNum;
+    if (firstNum > 12 && secondNum <= 12) {
+      day = firstNum;
+      month = secondNum;
     }
 
     let hour = hourRaw ? Number(hourRaw) : 0;
@@ -87,6 +114,28 @@ function parseDateValue(value: DateCell): ParsedDate | null {
 
     const year = yearRaw.length === 2 ? 2000 + Number(yearRaw) : Number(yearRaw);
     return fromParts(year, month, day, hour, minute, secondPart, Boolean(hourRaw));
+  }
+
+  const monthName = raw.match(
+    /^([A-Za-z]+)\s+(\d{1,2})(?:,?\s+(\d{4}))?(?:[,\s]+(\d{1,2})(?::(\d{2})(?::(\d{2}))?)?\s*(AM|PM)?)?$/i
+  );
+  if (monthName) {
+    const [, monthRaw, dayRaw, yearRaw, hourRaw, minuteRaw, secondRaw, meridiem] = monthName;
+    const month = MONTHS[monthRaw.toLowerCase()];
+    if (month) {
+      const day = Number(dayRaw);
+      const year = yearRaw ? Number(yearRaw) : new Date().getFullYear();
+      let hour = hourRaw ? Number(hourRaw) : 0;
+      const minute = minuteRaw ? Number(minuteRaw) : 0;
+      const secondPart = secondRaw ? Number(secondRaw) : 0;
+      if (meridiem) {
+        const upper = meridiem.toUpperCase();
+        if (upper === "PM" && hour < 12) hour += 12;
+        if (upper === "AM" && hour === 12) hour = 0;
+      }
+
+      return fromParts(year, month, day, hour, minute, secondPart, Boolean(hourRaw));
+    }
   }
 
   const parsed = new Date(raw);

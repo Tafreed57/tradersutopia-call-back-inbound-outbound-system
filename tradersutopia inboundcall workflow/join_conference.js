@@ -100,7 +100,12 @@ exports.handler = function (context, event, callback) {
   //    the post-Dial <Gather> below plays.
   var baseUrl = (context.BASE_URL || ('https://' + context.DOMAIN_NAME)).replace(/\/+$/, '');
   var startedAt = Date.now();
-  var waitUrl = baseUrl + '/conference_wait?conferenceName=' + encodeURIComponent(conferenceName) + '&startedAt=' + startedAt;
+  var waitUrl = baseUrl + '/conference_wait'
+    + '?conferenceName=' + encodeURIComponent(conferenceName)
+    + '&startedAt=' + startedAt
+    + '&callerNumber=' + encodeURIComponent(callerNumber)
+    + '&calledNumber=' + encodeURIComponent(calledNumber)
+    + '&callSid=' + encodeURIComponent(callSid);
 
   log('info', 'PARKING_CALLER', {
     conferenceName: conferenceName,

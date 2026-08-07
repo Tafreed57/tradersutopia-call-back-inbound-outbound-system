@@ -66,6 +66,9 @@ exports.handler = async function (context, event, callback) {
   }
   var startedAt = parseInt(startedAtParam, 10);
   if (isNaN(startedAt) || startedAt <= 0) startedAt = nowMs;
+  var callerNumber = getParam(event, ['callerNumber', 'CallerNumber', 'From', 'Caller']);
+  var calledNumber = getParam(event, ['calledNumber', 'CalledNumber', 'To', 'Called']);
+  var callSid = getParam(event, ['callSid', 'CallSid']);
 
   var elapsedMs = nowMs - startedAt;
   var maxWaitMs = parseInt(context.MAX_WAIT_MS || '30000', 10);
@@ -76,7 +79,10 @@ exports.handler = async function (context, event, callback) {
     conferenceName: conferenceName,
     startedAt: startedAt,
     elapsedMs: elapsedMs,
-    maxWaitMs: maxWaitMs
+    maxWaitMs: maxWaitMs,
+    callerNumber: callerNumber,
+    calledNumber: calledNumber,
+    callSid: callSid
   };
 
   function log(level, step, extra) {
@@ -126,6 +132,12 @@ exports.handler = async function (context, event, callback) {
         log('info', 'TIMEOUT_ENDING_CONFERENCE', { conferenceSid: confSid, participantCount: participants.length });
         await client.conferences(confSid).update({ status: 'completed' });
         log('info', 'TIMEOUT_CONFERENCE_ENDED', { conferenceSid: confSid });
+        await postMissedCallback(context, {
+          callerNumber: callerNumber,
+          calledNumber: calledNumber,
+          callSid: callSid,
+          conferenceName: conferenceName
+        }, log);
       } else {
         log('warn', 'TIMEOUT_NO_CONFERENCE_FOUND', { conferenceName: conferenceName });
       }
@@ -143,7 +155,10 @@ exports.handler = async function (context, event, callback) {
   // ═══════════════════════════════════════════════════════════════════
   var selfUrl = baseUrl + '/conference_wait'
     + '?conferenceName=' + encodeURIComponent(conferenceName)
-    + '&startedAt=' + startedAt;
+    + '&startedAt=' + startedAt
+    + '&callerNumber=' + encodeURIComponent(callerNumber)
+    + '&calledNumber=' + encodeURIComponent(calledNumber)
+    + '&callSid=' + encodeURIComponent(callSid);
 
   log('info', 'HOLD_LOOP', { outcome: 'continue_waiting', pauseSeconds: 5, selfUrl: selfUrl });
   twiml.say('Please hold while we connect you.');
@@ -151,3 +166,85 @@ exports.handler = async function (context, event, callback) {
   twiml.redirect({ method: 'POST' }, selfUrl);
   return callback(null, twiml);
 };
+
+function getParam(event, names) {
+  event = event || {};
+  for (var i = 0; i < names.length; i++) {
+    var name = names[i];
+    if (event[name] !== undefined && event[name] !== null && event[name] !== '') {
+      return String(event[name]).trim();
+    }
+  }
+
+  if (event.body && typeof event.body === 'object') {
+    for (var j = 0; j < names.length; j++) {
+      var bodyName = names[j];
+      if (event.body[bodyName] !== undefined && event.body[bodyName] !== null && event.body[bodyName] !== '') {
+        return String(event.body[bodyName]).trim();
+      }
+    }
+  }
+
+  var rawBody = (typeof event.body === 'string') ? event.body
+              : (typeof event.Body === 'string') ? event.Body : '';
+  if (!rawBody) return '';
+
+  for (var k = 0; k < names.length; k++) {
+    var escapedName = names[k].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var match = rawBody.match(new RegExp('(?:^|&)' + escapedName + '=([^&]*)'));
+    if (match) return decodeURIComponent(match[1]).trim();
+  }
+
+  return '';
+}
+
+async function postMissedCallback(context, data, log) {
+  var callbackUrl = (context.CALLBACK_SCRIPT_URL || '').trim();
+  if (!callbackUrl || !data.callerNumber) {
+    log('warn', 'MISSED_CALLBACK_SKIPPED', {
+      hasUrl: !!callbackUrl,
+      hasCallerNumber: !!data.callerNumber
+    });
+    return;
+  }
+
+  try {
+    var https = require('https');
+    var postBody = JSON.stringify({
+      event: 'callback_requested',
+      caller: data.callerNumber,
+      called_number: data.calledNumber,
+      digits: 'missed_no_agent',
+      call_sid: data.callSid,
+      conference_name: data.conferenceName,
+      timestamp: new Date().toISOString()
+    });
+    var url = new URL(callbackUrl);
+
+    var postResult = await new Promise(function (resolve, reject) {
+      var req = https.request({
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postBody)
+        },
+        timeout: 5000
+      }, function (res) {
+        var body = '';
+        res.on('data', function (chunk) { body += chunk; });
+        res.on('end', function () { resolve({ statusCode: res.statusCode, body: body }); });
+      });
+      req.on('error', function (err) { reject(err); });
+      req.on('timeout', function () { req.destroy(); reject(new Error('Request timed out')); });
+      req.write(postBody);
+      req.end();
+    });
+
+    log('info', 'MISSED_CALLBACK_LOGGED', { statusCode: postResult.statusCode });
+  } catch (err) {
+    log('error', 'MISSED_CALLBACK_FAILED', { message: err.message });
+  }
+}

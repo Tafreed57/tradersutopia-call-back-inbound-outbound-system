@@ -29,6 +29,9 @@ try {
 /* ──────────────────────────────────────────────────────────────────── */
 
 function createMockContext(overrides) {
+  overrides = overrides || {};
+  var participantCount = overrides.__participantCount || 2;
+
   function mockCalls(callSid) {
     return {
       fetch: function () {
@@ -64,10 +67,11 @@ function createMockContext(overrides) {
               participants: {
                 list: function () {
                   console.log('    [MOCK] conferences(' + sid + ').participants.list');
-                  return Promise.resolve([
-                    { callSid: 'CA_caller_mock_001' },
-                    { callSid: 'CA_agent_mock_002' }
-                  ]);
+                  var participants = [{ callSid: 'CA_caller_mock_001' }];
+                  if (participantCount > 1) {
+                    participants.push({ callSid: 'CA_agent_mock_002' });
+                  }
+                  return Promise.resolve(participants);
                 }
               },
               update: function (params) {
@@ -86,7 +90,7 @@ function createMockContext(overrides) {
       };
     }
   };
-  return Object.assign(base, overrides || {});
+  return Object.assign(base, overrides);
 }
 
 function formatResult(result) {
@@ -292,6 +296,31 @@ async function main() {
     'join_conference — missing conferenceName',
     './join_conference',
     {}
+  );
+
+  await runTest(
+    'conference_wait - timeout with agent present skips missed callback',
+    './conference_wait',
+    {
+      conferenceName: CONF,
+      startedAt: String(Date.now() - 60000),
+      callerNumber: '+15551230000',
+      calledNumber: '+18005551234',
+      callSid: 'CAmockCaller001'
+    },
+    { MAX_WAIT_MS: '1000', __participantCount: 2 }
+  );
+  await runTest(
+    'conference_wait - timeout no agent logs missed callback',
+    './conference_wait',
+    {
+      conferenceName: CONF,
+      startedAt: String(Date.now() - 60000),
+      callerNumber: '+15551230000',
+      calledNumber: '+18005551234',
+      callSid: 'CAmockCaller001'
+    },
+    { MAX_WAIT_MS: '1000', __participantCount: 1 }
   );
 
   // ── check_conference ───────────────────────────────────────────────
