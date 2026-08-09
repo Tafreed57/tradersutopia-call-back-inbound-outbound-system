@@ -65,6 +65,7 @@ type ConferenceResource = {
 };
 
 const DEFAULT_RECORDING_WINDOW_DAYS = 7;
+const MIN_CONFERENCE_RECORDING_SECONDS = 1;
 const MIN_CONNECTED_RECORDING_SECONDS = 10;
 const LEGACY_CONNECTED_RECORDING_SECONDS = 60;
 
@@ -267,7 +268,7 @@ export async function listCallRecordings(
   const completedRecordings = recordings.filter(
     (recording) =>
       recording.status === "completed" &&
-      parseDuration(recording.duration) >= MIN_CONNECTED_RECORDING_SECONDS
+      parseDuration(recording.duration) >= MIN_CONFERENCE_RECORDING_SECONDS
   );
 
   const callSids = Array.from(
@@ -338,7 +339,10 @@ export async function listCallRecordings(
     const childCall = selectConnectedChildCall(childCallMap.get(callSid) || []);
     const connectedDuration = parseDuration(recording.duration);
     const answeredBy = (childCall?.answeredBy || "").toLowerCase();
-    const isConferenceRecording = Boolean(conferenceSid) && conference?.status === "completed";
+    const isConferenceRecording =
+      Boolean(conferenceSid) &&
+      conference?.status === "completed" &&
+      connectedDuration >= MIN_CONFERENCE_RECORDING_SECONDS;
     const isHumanDetected = answeredBy === "human";
     const isLegacyConnected =
       !answeredBy &&
@@ -346,6 +350,7 @@ export async function listCallRecordings(
       connectedDuration >= LEGACY_CONNECTED_RECORDING_SECONDS;
     const isConnectedDial =
       !conferenceSid &&
+      connectedDuration >= MIN_CONNECTED_RECORDING_SECONDS &&
       call?.status === "completed" &&
       childCall?.status === "completed" &&
       parseDuration(childCall.duration) >= MIN_CONNECTED_RECORDING_SECONDS &&

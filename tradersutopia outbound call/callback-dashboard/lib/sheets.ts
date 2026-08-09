@@ -229,6 +229,39 @@ function leadToRow(lead: Lead): string[] {
 }
 
 // ── Read leads ────────────────────────────────────────────────────────────────
+function deduplicateLeadsByPhone(leads: Lead[]): Lead[] {
+  const deduplicated: Lead[] = [];
+  const indexByPhone = new Map<string, number>();
+
+  for (const lead of leads) {
+    const phoneKey = lead.phone.replace(/\D/g, "");
+    if (!phoneKey) {
+      deduplicated.push(lead);
+      continue;
+    }
+
+    const existingIndex = indexByPhone.get(phoneKey);
+    if (existingIndex === undefined) {
+      indexByPhone.set(phoneKey, deduplicated.length);
+      deduplicated.push(lead);
+      continue;
+    }
+
+    const existing = deduplicated[existingIndex];
+    const leadTime = dateSortValue(lead.createdAt);
+    const existingTime = dateSortValue(existing.createdAt);
+    const leadIsNewer =
+      leadTime > existingTime ||
+      (leadTime === existingTime &&
+        (lead._rowIndex || Number.MAX_SAFE_INTEGER) <
+          (existing._rowIndex || Number.MAX_SAFE_INTEGER));
+
+    if (leadIsNewer) deduplicated[existingIndex] = lead;
+  }
+
+  return deduplicated;
+}
+
 export async function getLeads(opts?: {
   status?: string;
   q?: string;
@@ -252,6 +285,8 @@ export async function getLeads(opts?: {
   let leads: Lead[] = useQueue
     ? rows.map((row, i) => queueRowToLead(row, i + 2, true)).filter((l) => l.phone || l.id)
     : rows.map((row, i) => rowToLead(row, i + 2, true));
+
+  leads = deduplicateLeadsByPhone(leads);
 
   // Filter by status
   if (opts?.status && opts.status !== "all") {

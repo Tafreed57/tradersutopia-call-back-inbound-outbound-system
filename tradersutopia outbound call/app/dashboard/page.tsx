@@ -848,7 +848,7 @@ export default function DashboardPage() {
             className="flex items-center gap-2 min-w-0 flex-1 text-left"
           >
             <span className="text-slate-400 text-xs uppercase tracking-wider">
-              Connected Recordings
+              Call Recordings
             </span>
             <span className="text-slate-500 text-xs">
               {recordingsLoading
@@ -890,9 +890,20 @@ export default function DashboardPage() {
                   >
                     <div className="flex flex-col lg:flex-row lg:items-center gap-3">
                       <div className="min-w-0 flex-1">
-                        <p className="text-white text-sm font-semibold truncate">
-                          {formatRecordingTitle(recording)}
-                        </p>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                              recording.direction === "inbound"
+                                ? "bg-emerald-950 text-emerald-300 border border-emerald-800"
+                                : "bg-sky-950 text-sky-300 border border-sky-800"
+                            }`}
+                          >
+                            {recording.direction === "inbound" ? "Inbound" : "Outbound"}
+                          </span>
+                          <p className="text-white text-sm font-semibold truncate">
+                            {formatRecordingTitle(recording)}
+                          </p>
+                        </div>
                         <p className="text-slate-500 text-xs">
                           {formatDate(recording.dateCreated)} - {formatRecordingDuration(recording.duration)} -{" "}
                           {formatRecordingVerification(recording)}
