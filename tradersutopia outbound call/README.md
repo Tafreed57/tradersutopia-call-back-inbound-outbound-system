@@ -118,6 +118,7 @@ Restart the dev server after changing `.env.local`.
 - Outbound bridge calls use Twilio Answering Machine Detection. Only a verified human answer is connected to the agent; machine, fax, and unknown answers are hung up by `/api/lead-screen`.
 - Inbound calls are recorded by Twilio on the conference once an agent joins the caller. Hold audio and unanswered conferences are not recorded.
 - Audio stays stored in Twilio. The dashboard `Connected Recordings` section lists completed calls from the last 7 days and streams playback through `/api/recordings/[sid]/media` after the dashboard access code is validated.
+- Starred recordings are saved in the `Recording Favorites` sheet and remain available in the dashboard after they leave the recent seven-day/newest-50 list.
 - Recordings under 10 seconds, incomplete calls, unbridged conferences, and voicemail-only outbound legs are excluded. Pre-AMD dual-channel calls need at least 60 seconds of connected audio to remain visible during the 7-day transition window.
 
 ### Step 8: Custom Domain (Optional)

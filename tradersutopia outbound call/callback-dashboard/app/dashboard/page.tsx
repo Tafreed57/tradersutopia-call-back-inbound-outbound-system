@@ -48,6 +48,8 @@ interface CallRecording {
   answeredBy: string;
   connectedDuration: number;
   verification: "conference-bridge" | "human-detected" | "connected-duration";
+  isFavorite: boolean;
+  favoritedAt: string;
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -90,6 +92,9 @@ export default function DashboardPage() {
   const [recordingsOpen, setRecordingsOpen] = useState(false);
   const [recordingsLoading, setRecordingsLoading] = useState(false);
   const [recordingsError, setRecordingsError] = useState("");
+  const [recordingRecentCount, setRecordingRecentCount] = useState(0);
+  const [recordingsView, setRecordingsView] = useState<"all" | "favorites">("all");
+  const [favoriteBusy, setFavoriteBusy] = useState<Set<string>>(new Set());
 
   // Push notifications
   const [pushSupported, setPushSupported] = useState(false);
@@ -371,6 +376,7 @@ export default function DashboardPage() {
       }
       if (data.ok) {
         setRecordings(Array.isArray(data.recordings) ? data.recordings : []);
+        setRecordingRecentCount(Number(data.recentCount || 0));
       } else {
         setRecordingsError(data.error || "Unable to load recordings.");
       }
@@ -400,6 +406,65 @@ export default function DashboardPage() {
     void fetchLeads();
     void fetchLiveCalls();
     void fetchRecordings();
+  }
+
+  async function handleToggleFavorite(recording: CallRecording) {
+    if (favoriteBusy.has(recording.sid)) return;
+
+    const isFavorite = !recording.isFavorite;
+    setFavoriteBusy((previous) => new Set(previous).add(recording.sid));
+    setRecordings((previous) =>
+      previous.map((item) =>
+        item.sid === recording.sid ? { ...item, isFavorite } : item
+      )
+    );
+
+    try {
+      const res = await fetch("/api/recording-favorites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessCode: getStoredAccessCode(),
+          favorite: isFavorite,
+          recordingSid: recording.sid,
+          recording,
+        }),
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        resetAuth(data.error);
+        return;
+      }
+      if (!data.ok) {
+        setRecordings((previous) =>
+          previous.map((item) =>
+            item.sid === recording.sid
+              ? { ...item, isFavorite: recording.isFavorite }
+              : item
+          )
+        );
+        setRecordingsError(data.error || "Unable to update favorite.");
+        return;
+      }
+
+      await fetchRecordings();
+    } catch (err) {
+      console.error("Favorite recording error:", err);
+      setRecordings((previous) =>
+        previous.map((item) =>
+          item.sid === recording.sid
+            ? { ...item, isFavorite: recording.isFavorite }
+            : item
+        )
+      );
+      setRecordingsError("Unable to update favorite.");
+    } finally {
+      setFavoriteBusy((previous) => {
+        const next = new Set(previous);
+        next.delete(recording.sid);
+        return next;
+      });
+    }
   }
 
   // ── Actions ─────────────────────────────────────────────────────────────────
@@ -645,6 +710,11 @@ export default function DashboardPage() {
   // Normalized manual number for emergency check
   const manualNormalized = manualNumber.trim() ? normalizePhone(manualNumber.trim()) : "";
   const isManualEmergency = manualNormalized.length >= 3 && isEmergencyClient(manualNormalized);
+  const favoriteCount = recordings.filter((recording) => recording.isFavorite).length;
+  const visibleRecordings =
+    recordingsView === "favorites"
+      ? recordings.filter((recording) => recording.isFavorite)
+      : recordings;
 
   // ── MAIN DASHBOARD ──────────────────────────────────────────────────────────
   return (
@@ -853,9 +923,7 @@ export default function DashboardPage() {
             <span className="text-slate-500 text-xs">
               {recordingsLoading
                 ? "Loading..."
-                : recordings.length > 0
-                  ? `${recordings.length} in the last 7 days`
-                  : "Last 7 days: none"}
+                : `${recordingRecentCount} recent / ${favoriteCount} saved`}
             </span>
             <span className="text-slate-500 text-xs ml-auto">
               {recordingsOpen ? "Hide" : "Show"}
@@ -873,17 +941,47 @@ export default function DashboardPage() {
 
         {recordingsOpen && (
           <div className="mt-3">
+            <div className="flex gap-1 mb-3" role="tablist" aria-label="Recording views">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={recordingsView === "all"}
+                onClick={() => setRecordingsView("all")}
+                className={`px-3 py-1.5 text-xs rounded font-medium transition ${
+                  recordingsView === "all"
+                    ? "bg-blue-600 text-white"
+                    : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                }`}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={recordingsView === "favorites"}
+                onClick={() => setRecordingsView("favorites")}
+                className={`px-3 py-1.5 text-xs rounded font-medium transition ${
+                  recordingsView === "favorites"
+                    ? "bg-amber-600 text-white"
+                    : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                }`}
+              >
+                Favorites ({favoriteCount})
+              </button>
+            </div>
             {recordingsError && (
               <p className="text-red-400 text-sm py-2">{recordingsError}</p>
             )}
-            {!recordingsError && recordings.length === 0 && !recordingsLoading && (
+            {!recordingsError && visibleRecordings.length === 0 && !recordingsLoading && (
               <p className="text-slate-600 text-sm py-2">
-                No connected call recordings in the last 7 days.
+                {recordingsView === "favorites"
+                  ? "No favorite recordings yet."
+                  : "No connected call recordings in the last 7 days."}
               </p>
             )}
-            {recordings.length > 0 && (
+            {visibleRecordings.length > 0 && (
               <div className="space-y-2">
-                {recordings.map((recording) => (
+                {visibleRecordings.map((recording) => (
                   <div
                     key={recording.sid}
                     className="bg-slate-900 border border-slate-800 rounded-lg p-3"
@@ -912,6 +1010,31 @@ export default function DashboardPage() {
                           {recording.conferenceName || recording.callSid || recording.sid}
                         </p>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleToggleFavorite(recording)}
+                        disabled={favoriteBusy.has(recording.sid)}
+                        aria-pressed={recording.isFavorite}
+                        aria-label={
+                          recording.isFavorite
+                            ? "Remove recording from favorites"
+                            : "Save recording to favorites"
+                        }
+                        title={
+                          recording.isFavorite
+                            ? "Remove from favorites"
+                            : "Save to favorites"
+                        }
+                        className={`w-9 h-9 shrink-0 self-end lg:self-auto flex items-center justify-center rounded border transition disabled:opacity-50 ${
+                          recording.isFavorite
+                            ? "bg-amber-950 text-amber-300 border-amber-700 hover:bg-amber-900"
+                            : "bg-slate-950 text-slate-400 border-slate-700 hover:text-amber-300 hover:border-amber-700"
+                        }`}
+                      >
+                        <span aria-hidden="true" className="text-xl leading-none">
+                          {recording.isFavorite ? "\u2605" : "\u2606"}
+                        </span>
+                      </button>
                       <audio
                         controls
                         preload="none"

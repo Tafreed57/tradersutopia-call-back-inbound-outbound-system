@@ -5,6 +5,7 @@
  */
 
 import { google, sheets_v4 } from "googleapis";
+import type { CallRecording } from "./twilio";
 import {
   dateSortValue,
   isDateSortField,
@@ -45,6 +46,8 @@ const PUSH_SUBS_TAB = () =>
   process.env.GOOGLE_SHEET_PUSH_SUBS_TAB || "Push Subscriptions";
 const PUSH_NOTIFIED_TAB = () =>
   process.env.GOOGLE_SHEET_PUSH_NOTIFIED_TAB || "Push Notified";
+const RECORDING_FAVORITES_TAB = () =>
+  process.env.GOOGLE_SHEET_RECORDING_FAVORITES_TAB || "Recording Favorites";
 
 // "Callback Queue" tab uses different columns; we map them to our Lead shape
 const IS_QUEUE_LAYOUT = () =>
@@ -109,6 +112,30 @@ const LOG_HEADERS = [
   "affiliatePhone",
   "details",
   "twilioCallSid",
+];
+
+const RECORDING_FAVORITE_HEADERS = [
+  "recordingSid",
+  "favoritedAt",
+  "callSid",
+  "conferenceSid",
+  "conferenceName",
+  "status",
+  "dateCreated",
+  "duration",
+  "channels",
+  "source",
+  "from",
+  "to",
+  "direction",
+  "callStatus",
+  "startTime",
+  "endTime",
+  "customerPhone",
+  "agentPhone",
+  "answeredBy",
+  "connectedDuration",
+  "verification",
 ];
 
 // ── Ensure headers exist (cached — only runs once per server lifecycle) ───────
@@ -431,6 +458,217 @@ export async function updateLead(
 }
 
 // ── Live Calls ────────────────────────────────────────────────────────────────
+
+export interface RecordingFavorite {
+  recording: CallRecording;
+  favoritedAt: string;
+}
+
+async function ensureRecordingFavoritesSheet(): Promise<void> {
+  const sheets = getSheets();
+  const spreadsheetId = SHEET_ID();
+  const tab = RECORDING_FAVORITES_TAB();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const exists = (meta.data.sheets || []).some(
+    (sheet) => sheet.properties?.title === tab
+  );
+
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [{ addSheet: { properties: { title: tab } } }],
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.toLowerCase().includes("already exists")) throw err;
+    }
+  }
+
+  await ensureHeaders(
+    sheets,
+    spreadsheetId,
+    tab,
+    RECORDING_FAVORITE_HEADERS
+  );
+}
+
+function recordingFavoriteToRow(
+  recording: CallRecording,
+  favoritedAt: string
+): Array<string | number> {
+  return [
+    recording.sid,
+    favoritedAt,
+    recording.callSid,
+    recording.conferenceSid,
+    recording.conferenceName,
+    recording.status,
+    recording.dateCreated,
+    recording.duration,
+    recording.channels,
+    recording.source,
+    recording.from,
+    recording.to,
+    recording.direction,
+    recording.callStatus,
+    recording.startTime,
+    recording.endTime,
+    recording.customerPhone,
+    recording.agentPhone,
+    recording.answeredBy,
+    recording.connectedDuration,
+    recording.verification,
+  ];
+}
+
+function rowToRecordingFavorite(row: SheetCell[]): RecordingFavorite | null {
+  const sid = sheetCellToString(row[0]).trim();
+  if (!/^RE[0-9a-fA-F]{32}$/.test(sid)) return null;
+
+  const verificationRaw = sheetCellToString(row[20]);
+  const verification: CallRecording["verification"] =
+    verificationRaw === "conference-bridge" ||
+    verificationRaw === "human-detected" ||
+    verificationRaw === "connected-duration"
+      ? verificationRaw
+      : "connected-duration";
+
+  return {
+    favoritedAt: sheetCellToString(row[1]),
+    recording: {
+      sid,
+      callSid: sheetCellToString(row[2]),
+      conferenceSid: sheetCellToString(row[3]),
+      conferenceName: sheetCellToString(row[4]),
+      status: sheetCellToString(row[5]),
+      dateCreated: sheetCellToString(row[6]),
+      duration: sheetCellToString(row[7]),
+      channels: Number(row[8] || 0),
+      source: sheetCellToString(row[9]),
+      from: sheetCellToString(row[10]),
+      to: sheetCellToString(row[11]),
+      direction: sheetCellToString(row[12]),
+      callStatus: sheetCellToString(row[13]),
+      startTime: sheetCellToString(row[14]),
+      endTime: sheetCellToString(row[15]),
+      customerPhone: sheetCellToString(row[16]),
+      agentPhone: sheetCellToString(row[17]),
+      answeredBy: sheetCellToString(row[18]),
+      connectedDuration: Number(row[19] || 0),
+      verification,
+    },
+  };
+}
+
+export async function getRecordingFavorites(): Promise<RecordingFavorite[]> {
+  const sheets = getSheets();
+  const spreadsheetId = SHEET_ID();
+  const tab = RECORDING_FAVORITES_TAB();
+
+  await ensureRecordingFavoritesSheet();
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${tab}!A2:U`,
+  });
+
+  return ((res.data.values || []) as SheetCell[][])
+    .map(rowToRecordingFavorite)
+    .filter((favorite): favorite is RecordingFavorite => favorite !== null)
+    .sort(
+      (a, b) =>
+        dateSortValue(b.favoritedAt) - dateSortValue(a.favoritedAt)
+    );
+}
+
+export async function saveRecordingFavorite(
+  recording: CallRecording
+): Promise<RecordingFavorite> {
+  const sheets = getSheets();
+  const spreadsheetId = SHEET_ID();
+  const tab = RECORDING_FAVORITES_TAB();
+
+  await ensureRecordingFavoritesSheet();
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${tab}!A2:B`,
+  });
+  const rows = res.data.values || [];
+  const existingIndex = rows.findIndex((row) => row[0] === recording.sid);
+  const favoritedAt =
+    existingIndex >= 0 && rows[existingIndex][1]
+      ? String(rows[existingIndex][1])
+      : new Date().toISOString();
+  const values = [recordingFavoriteToRow(recording, favoritedAt)];
+
+  if (existingIndex >= 0) {
+    const rowNumber = existingIndex + 2;
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${tab}!A${rowNumber}:U${rowNumber}`,
+      valueInputOption: "RAW",
+      requestBody: { values },
+    });
+  } else {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${tab}!A:U`,
+      valueInputOption: "RAW",
+      requestBody: { values },
+    });
+  }
+
+  return { recording, favoritedAt };
+}
+
+export async function removeRecordingFavorite(
+  recordingSid: string
+): Promise<void> {
+  const sheets = getSheets();
+  const spreadsheetId = SHEET_ID();
+  const tab = RECORDING_FAVORITES_TAB();
+
+  await ensureRecordingFavoritesSheet();
+
+  const [values, meta] = await Promise.all([
+    sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${tab}!A2:A`,
+    }),
+    sheets.spreadsheets.get({ spreadsheetId }),
+  ]);
+  const rows = values.data.values || [];
+  const sheetId = (meta.data.sheets || []).find(
+    (sheet) => sheet.properties?.title === tab
+  )?.properties?.sheetId;
+  if (sheetId === undefined) return;
+
+  const matchingRows = rows
+    .map((row, index) => (row[0] === recordingSid ? index + 2 : -1))
+    .filter((rowNumber) => rowNumber > 0)
+    .sort((a, b) => b - a);
+  if (matchingRows.length === 0) return;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: matchingRows.map((rowNumber) => ({
+        deleteDimension: {
+          range: {
+            sheetId,
+            dimension: "ROWS",
+            startIndex: rowNumber - 1,
+            endIndex: rowNumber,
+          },
+        },
+      })),
+    },
+  });
+}
 
 export interface LiveCall {
   agentNumber: string;

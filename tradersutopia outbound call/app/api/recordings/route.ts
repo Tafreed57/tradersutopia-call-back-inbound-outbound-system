@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateAccessCode } from "@/lib/access";
+import { getRecordingFavorites } from "@/lib/sheets";
 import { listCallRecordings } from "@/lib/twilio";
 
 export const runtime = "nodejs";
@@ -20,13 +21,41 @@ export async function GET(req: NextRequest) {
     const limitRaw = Number(req.nextUrl.searchParams.get("limit") || "50");
     const daysRaw = Number(req.nextUrl.searchParams.get("days") || "7");
     const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(daysRaw, 31)) : 7;
-    const recordings = await listCallRecordings(
-      Number.isFinite(limitRaw) ? limitRaw : 50,
-      days
+    const [recentRecordings, favorites] = await Promise.all([
+      listCallRecordings(Number.isFinite(limitRaw) ? limitRaw : 50, days),
+      getRecordingFavorites(),
+    ]);
+    const favoriteBySid = new Map(
+      favorites.map((favorite) => [favorite.recording.sid, favorite])
+    );
+    const recentSids = new Set(recentRecordings.map((recording) => recording.sid));
+    const recordings = [
+      ...recentRecordings.map((recording) => ({
+        ...recording,
+        isFavorite: favoriteBySid.has(recording.sid),
+        favoritedAt: favoriteBySid.get(recording.sid)?.favoritedAt || "",
+      })),
+      ...favorites
+        .filter((favorite) => !recentSids.has(favorite.recording.sid))
+        .map((favorite) => ({
+          ...favorite.recording,
+          isFavorite: true,
+          favoritedAt: favorite.favoritedAt,
+        })),
+    ].sort(
+      (a, b) =>
+        Date.parse(b.dateCreated || b.favoritedAt) -
+        Date.parse(a.dateCreated || a.favoritedAt)
     );
 
     return NextResponse.json(
-      { ok: true, recordings, windowDays: days },
+      {
+        ok: true,
+        recordings,
+        windowDays: days,
+        recentCount: recentRecordings.length,
+        favoriteCount: favorites.length,
+      },
       { headers: { "Cache-Control": "no-store, no-cache, must-revalidate" } }
     );
   } catch (err: unknown) {
