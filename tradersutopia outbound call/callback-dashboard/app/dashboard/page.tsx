@@ -166,8 +166,12 @@ export default function DashboardPage() {
       const savedPhone = localStorage.getItem("cb_phone");
 
       if (savedPhone) {
-        setAffiliatePhone(savedPhone);
-        setPhoneSet(true);
+        const normalizedPhone = normalizePhone(savedPhone);
+        if (/^\+[1-9]\d{7,14}$/.test(normalizedPhone)) {
+          localStorage.setItem("cb_phone", normalizedPhone);
+          setAffiliatePhone(normalizedPhone);
+          setPhoneSet(true);
+        }
       }
 
       if (savedAuth === "true" && savedCode) {
@@ -294,13 +298,13 @@ export default function DashboardPage() {
 
   // ── Phone handler ───────────────────────────────────────────────────────────
   function handleSetPhone() {
-    const cleaned = affiliatePhone.trim();
-    if (!cleaned.startsWith("+") || cleaned.length < 8) {
+    const normalizedPhone = normalizePhone(affiliatePhone);
+    if (!/^\+[1-9]\d{7,14}$/.test(normalizedPhone)) {
       alert("Phone must be E.164 format, e.g. +14375053539");
       return;
     }
-    localStorage.setItem("cb_phone", cleaned);
-    setAffiliatePhone(cleaned);
+    localStorage.setItem("cb_phone", normalizedPhone);
+    setAffiliatePhone(normalizedPhone);
     setPhoneSet(true);
   }
 
@@ -509,12 +513,18 @@ export default function DashboardPage() {
   }
 
   async function handleToggleCurrentAgent() {
-    const existing = routingAgents.find((agent) => agent.phone === affiliatePhone);
-    await updateRouting(`agent:${affiliatePhone}`, {
+    const phone = normalizePhone(affiliatePhone);
+    const existing = routingAgents.find((agent) => agent.phone === phone);
+    if (!existing) {
+      setRoutingOpen(true);
+      setRoutingError(`${phone} is not registered as an inbound agent.`);
+      return;
+    }
+    await updateRouting(`agent:${phone}`, {
       type: "agent",
-      phone: affiliatePhone,
-      label: existing?.label || "My phone",
-      enabled: !existing?.enabled,
+      phone,
+      label: existing.label,
+      enabled: !existing.enabled,
     });
   }
 
@@ -839,7 +849,7 @@ export default function DashboardPage() {
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-8 w-full max-w-sm shadow-2xl">
           <h1 className="text-xl font-bold text-white mb-1">Your Phone Number</h1>
           <p className="text-slate-400 text-sm mb-6">
-            When you click &quot;Call&quot;, we call YOUR phone first, then bridge to the lead.
+            This number identifies your inbound agent status and receives your outbound callback bridges.
           </p>
           <input
             type="tel"
@@ -876,8 +886,9 @@ export default function DashboardPage() {
       ? recordings.filter((recording) => recording.isFavorite)
       : recordings;
   const activeRoutingLines = routingLines.filter((line) => line.enabled);
+  const normalizedAffiliatePhone = normalizePhone(affiliatePhone);
   const currentRoutingAgent = routingAgents.find(
-    (agent) => agent.phone === affiliatePhone
+    (agent) => agent.phone === normalizedAffiliatePhone
   );
   const receivingCalls = currentRoutingAgent?.enabled === true;
 
@@ -905,20 +916,36 @@ export default function DashboardPage() {
             type="button"
             role="switch"
             aria-checked={receivingCalls}
+            aria-label={currentRoutingAgent
+              ? `${receivingCalls ? "Pause" : "Resume"} inbound calls for ${normalizedAffiliatePhone}`
+              : `${normalizedAffiliatePhone} is not registered for inbound calls`}
             onClick={() => void handleToggleCurrentAgent()}
-            disabled={routingBusy === `agent:${affiliatePhone}` || routingLoading}
-            className={`px-3 py-1.5 text-sm rounded-lg transition disabled:opacity-50 ${
-              receivingCalls
+            disabled={!currentRoutingAgent || routingBusy === `agent:${normalizedAffiliatePhone}` || routingLoading}
+            className={`min-w-36 px-3 py-1.5 rounded-lg transition disabled:opacity-70 ${
+              !currentRoutingAgent
+                ? "bg-slate-700 text-slate-300 cursor-not-allowed"
+                : receivingCalls
                 ? "bg-emerald-700 hover:bg-emerald-600 text-white"
                 : "bg-amber-700 hover:bg-amber-600 text-white"
             }`}
-            title={receivingCalls ? "Pause inbound calls to this phone" : "Receive inbound calls on this phone"}
-          >
-            {routingBusy === `agent:${affiliatePhone}`
-              ? "Updating..."
+            title={!currentRoutingAgent
+              ? `${normalizedAffiliatePhone} is not registered as an inbound agent`
               : receivingCalls
-                ? "Receiving Calls"
-                : "Calls Paused"}
+                ? `Pause inbound calls to ${normalizedAffiliatePhone}`
+                : `Resume inbound calls to ${normalizedAffiliatePhone}`}
+          >
+            <span className="block text-sm">
+              {routingBusy === `agent:${normalizedAffiliatePhone}`
+                ? "Updating..."
+                : !currentRoutingAgent
+                  ? "Not Routed"
+                  : receivingCalls
+                    ? "Receiving Calls"
+                    : "Calls Paused"}
+            </span>
+            <span className="block text-[10px] font-mono opacity-80">
+              {normalizedAffiliatePhone}
+            </span>
           </button>
           <button
             type="button"
@@ -1067,7 +1094,7 @@ export default function DashboardPage() {
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-white truncate">
                         {agent.label}
-                        {agent.phone === affiliatePhone && (
+                        {agent.phone === normalizedAffiliatePhone && (
                           <span className="ml-2 text-[10px] uppercase text-blue-300">This phone</span>
                         )}
                       </p>

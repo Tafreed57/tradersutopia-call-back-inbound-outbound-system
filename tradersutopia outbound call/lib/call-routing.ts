@@ -1,4 +1,5 @@
 import { google, sheets_v4 } from "googleapis";
+import { revalidateTag, unstable_cache } from "next/cache";
 import twilio from "twilio";
 
 type SheetCell = string | number | boolean | null | undefined;
@@ -12,6 +13,7 @@ const ROUTING_HEADERS = [
   "twilioSid",
   "updatedAt",
 ];
+const ROUTING_CACHE_TAG = "call-routing-config";
 
 export interface RoutingAgent {
   phone: string;
@@ -219,7 +221,7 @@ async function getRoutingRows(): Promise<RoutingRow[]> {
   });
 }
 
-export async function getCallRoutingConfig(): Promise<CallRoutingConfig> {
+async function loadCallRoutingConfig(): Promise<CallRoutingConfig> {
   const rows = await getRoutingRows();
   return {
     agents: rows
@@ -237,6 +239,22 @@ export async function getCallRoutingConfig(): Promise<CallRoutingConfig> {
       }))
       .sort((a, b) => Number(b.isDefault) - Number(a.isDefault)),
   };
+}
+
+const getCachedCallRoutingConfig = unstable_cache(
+  loadCallRoutingConfig,
+  [ROUTING_CACHE_TAG],
+  { revalidate: 10, tags: [ROUTING_CACHE_TAG] }
+);
+
+export async function getCallRoutingConfig(options?: {
+  fresh?: boolean;
+}): Promise<CallRoutingConfig> {
+  return options?.fresh ? loadCallRoutingConfig() : getCachedCallRoutingConfig();
+}
+
+function invalidateCallRoutingConfig(): void {
+  revalidateTag(ROUTING_CACHE_TAG, { expire: 0 });
 }
 
 async function writeRoutingRow(rowNumber: number | null, values: Array<string | boolean>): Promise<void> {
@@ -278,7 +296,8 @@ export async function upsertRoutingAgent(input: {
     "",
     new Date().toISOString(),
   ]);
-  return getCallRoutingConfig();
+  invalidateCallRoutingConfig();
+  return loadCallRoutingConfig();
 }
 
 export async function upsertRoutingLine(input: {
@@ -318,7 +337,8 @@ export async function upsertRoutingLine(input: {
     input.twilioSid || existing?.twilioSid || "",
     new Date().toISOString(),
   ]);
-  return getCallRoutingConfig();
+  invalidateCallRoutingConfig();
+  return loadCallRoutingConfig();
 }
 
 export async function removeRoutingAgent(phoneValue: string): Promise<CallRoutingConfig> {
@@ -349,7 +369,8 @@ export async function removeRoutingAgent(phoneValue: string): Promise<CallRoutin
       }],
     },
   });
-  return getCallRoutingConfig();
+  invalidateCallRoutingConfig();
+  return loadCallRoutingConfig();
 }
 
 export async function resolveOutboundLine(preferredPhone?: string): Promise<RoutingLine> {

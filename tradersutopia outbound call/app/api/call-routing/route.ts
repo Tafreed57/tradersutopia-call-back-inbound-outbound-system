@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (type === "line") {
-      const current = await getCallRoutingConfig();
+      const current = await getCallRoutingConfig({ fresh: true });
       const existing = current.lines.find((line) => line.phone === phone);
       if (
         existing?.enabled &&
