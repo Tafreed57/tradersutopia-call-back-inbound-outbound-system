@@ -113,6 +113,13 @@ Restart the dev server after changing `.env.local`.
 6. Click "Call" on a lead → your phone rings → answer → you hear "Connecting you to your callback" → lead's phone rings
 7. Check Google Sheets to confirm the status column updated
 
+### Call Recordings
+
+- Outbound bridge calls are recorded by Twilio when the affiliate and lead are connected.
+- Inbound calls are recorded by Twilio on the conference once an agent joins the caller.
+- Audio stays stored in Twilio. The dashboard `Recorded Calls` section calls `/api/recordings` to list Twilio recordings, then streams playback through `/api/recordings/[sid]/media` after the dashboard access code is validated.
+- Existing recordings already saved in Twilio can appear in the dashboard. New inbound recordings require the updated `/join_conference` Function to be deployed in Twilio.
+
 ### Step 8: Custom Domain (Optional)
 
 In Vercel → Settings → Domains → add your custom domain (e.g. `callbacks.tradersutopia.com`).

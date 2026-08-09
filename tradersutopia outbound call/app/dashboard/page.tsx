@@ -27,6 +27,24 @@ interface LiveCall {
   endTime: string;
 }
 
+interface CallRecording {
+  sid: string;
+  callSid: string;
+  conferenceSid: string;
+  conferenceName: string;
+  status: string;
+  dateCreated: string;
+  duration: string;
+  channels: number;
+  source: string;
+  from: string;
+  to: string;
+  direction: string;
+  callStatus: string;
+  startTime: string;
+  endTime: string;
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   // Auth state
@@ -61,6 +79,12 @@ export default function DashboardPage() {
   // Live calls
   const [liveCalls, setLiveCalls] = useState<LiveCall[]>([]);
   const [liveCallsOpen, setLiveCallsOpen] = useState(true);
+
+  // Recorded calls
+  const [recordings, setRecordings] = useState<CallRecording[]>([]);
+  const [recordingsOpen, setRecordingsOpen] = useState(false);
+  const [recordingsLoading, setRecordingsLoading] = useState(false);
+  const [recordingsError, setRecordingsError] = useState("");
 
   // Push notifications
   const [pushSupported, setPushSupported] = useState(false);
@@ -321,6 +345,56 @@ export default function DashboardPage() {
     const interval = setInterval(fetchLiveCalls, 5000);
     return () => clearInterval(interval);
   }, [isAuth, phoneSet, fetchLiveCalls]);
+
+  const fetchRecordings = useCallback(async () => {
+    setRecordingsLoading(true);
+    setRecordingsError("");
+    try {
+      const params = new URLSearchParams({
+        limit: "50",
+        accessCode: getStoredAccessCode(),
+        t: String(Date.now()),
+      });
+      const res = await fetch(`/api/recordings?${params}`, {
+        cache: "no-store",
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        resetAuth(data.error);
+        return;
+      }
+      if (data.ok) {
+        setRecordings(Array.isArray(data.recordings) ? data.recordings : []);
+      } else {
+        setRecordingsError(data.error || "Unable to load recordings.");
+      }
+    } catch (err) {
+      console.error("Fetch recordings error:", err);
+      setRecordingsError("Unable to load recordings.");
+    } finally {
+      setRecordingsLoading(false);
+    }
+  }, [getStoredAccessCode, resetAuth]);
+
+  useEffect(() => {
+    if (!isAuth || !phoneSet) return;
+    const timer = window.setTimeout(() => {
+      void fetchRecordings();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isAuth, phoneSet, fetchRecordings]);
+
+  useEffect(() => {
+    if (!isAuth || !phoneSet) return;
+    const interval = setInterval(fetchRecordings, 60000);
+    return () => clearInterval(interval);
+  }, [isAuth, phoneSet, fetchRecordings]);
+
+  function handleRefresh() {
+    void fetchLeads();
+    void fetchLiveCalls();
+    void fetchRecordings();
+  }
 
   // ── Actions ─────────────────────────────────────────────────────────────────
   async function handleCall(lead: Lead) {
@@ -610,7 +684,7 @@ export default function DashboardPage() {
             </button>
           )}
           <button
-            onClick={fetchLeads}
+            onClick={handleRefresh}
             className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 rounded-lg transition"
           >
             Refresh
@@ -753,6 +827,85 @@ export default function DashboardPage() {
                     </div>
                   ));
                 })()}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Recorded Calls Panel */}
+      <div className="px-4 py-3 border-b border-slate-800 bg-slate-950/40">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setRecordingsOpen(!recordingsOpen)}
+            className="flex items-center gap-2 min-w-0 flex-1 text-left"
+          >
+            <span className="text-slate-400 text-xs uppercase tracking-wider">
+              Recorded Calls
+            </span>
+            <span className="text-slate-500 text-xs">
+              {recordingsLoading
+                ? "Loading..."
+                : recordings.length > 0
+                  ? `${recordings.length} saved`
+                  : "None"}
+            </span>
+            <span className="text-slate-500 text-xs ml-auto">
+              {recordingsOpen ? "Hide" : "Show"}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void fetchRecordings()}
+            disabled={recordingsLoading}
+            className="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg transition"
+          >
+            Refresh
+          </button>
+        </div>
+
+        {recordingsOpen && (
+          <div className="mt-3">
+            {recordingsError && (
+              <p className="text-red-400 text-sm py-2">{recordingsError}</p>
+            )}
+            {!recordingsError && recordings.length === 0 && !recordingsLoading && (
+              <p className="text-slate-600 text-sm py-2">
+                No Twilio recordings found yet.
+              </p>
+            )}
+            {recordings.length > 0 && (
+              <div className="space-y-2">
+                {recordings.map((recording) => (
+                  <div
+                    key={recording.sid}
+                    className="bg-slate-900 border border-slate-800 rounded-lg p-3"
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-white text-sm font-semibold truncate">
+                          {formatRecordingTitle(recording)}
+                        </p>
+                        <p className="text-slate-500 text-xs">
+                          {formatDate(recording.dateCreated)} - {formatRecordingDuration(recording.duration)} -{" "}
+                          {recording.channels === 2 ? "Dual channel" : "Single channel"}
+                        </p>
+                        <p className="text-slate-600 text-[11px] font-mono truncate">
+                          {recording.conferenceName || recording.callSid || recording.sid}
+                        </p>
+                      </div>
+                      <audio
+                        controls
+                        preload="none"
+                        className="w-full lg:w-[360px] h-9"
+                        src={`/api/recordings/${recording.sid}/media?accessCode=${encodeURIComponent(
+                          getStoredAccessCode()
+                        )}`}
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -1157,4 +1310,22 @@ function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
 
 function formatDate(raw: string): string {
   return formatDateValue(raw);
+}
+
+function formatRecordingTitle(recording: CallRecording): string {
+  if (recording.from || recording.to) {
+    return `${recording.from || "Unknown"} -> ${recording.to || "Unknown"}`;
+  }
+  if (recording.conferenceName) {
+    return `Conference ${recording.conferenceName}`;
+  }
+  return recording.sid;
+}
+
+function formatRecordingDuration(duration: string): string {
+  const seconds = Number(duration);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0:00";
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.floor(seconds % 60);
+  return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }

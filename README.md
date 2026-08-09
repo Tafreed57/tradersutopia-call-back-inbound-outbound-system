@@ -35,6 +35,8 @@ Both systems use **Twilio Voice** for PSTN connectivity and are designed to be d
 - **Post-call menu** — Handled in Twilio Functions (callback request, retry) with optional SMS notify to other agents when one takes the call.
 - **Structured logging** — JSON logs with request IDs and correlation for debugging in Twilio Live Logs.
 
+- **Call recordings** - Answered inbound conferences and outbound bridge calls are saved as Twilio recordings and can be played back in the TU dashboard.
+
 ### Outbound / callback dashboard
 
 - **Lead queue** — Leads stored in **Google Sheets** (Callback Queue tab); affiliates see only their data via access-code auth.

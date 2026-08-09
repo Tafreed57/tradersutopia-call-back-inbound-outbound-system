@@ -69,7 +69,15 @@ Only the first case, timeout with no agent participant, creates an automatic `NE
 
 ---
 
-## 7. Summary table
+## 7. Call recordings
+
+- `/join_conference` adds `record: 'record-from-start'` to the caller conference. Twilio stores the audio as a conference recording once the caller and an agent are bridged.
+- The recording does not create or update a callback queue row. Callback rows are still controlled only by missed-call timeout and explicit post-conference callback requests.
+- Playback is handled by the Vercel dashboard, which lists Twilio recordings and streams audio through authenticated `/api/recordings` routes.
+
+---
+
+## 8. Summary table
 
 | Event | Effect on caller | Callback queue |
 |-------|------------------|----------------|
@@ -82,7 +90,7 @@ Only the first case, timeout with no agent participant, creates an automatic `NE
 
 ---
 
-## 8. Key functions (reference)
+## 9. Key functions (reference)
 
 - **simulring_agents**: Claims available agents (Sync or REST), creates outbound legs, stores conference call SIDs in Sync.
 - **agent_whisper**: Plays "Press 1 to accept"; on no input or non-1, hangs up **that agent only**.

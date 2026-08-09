@@ -117,19 +117,28 @@ exports.handler = function (context, event, callback) {
   });
 
   var statusCallbackUrl = baseUrl + '/conference_status_callback';
+  var recordingStatusCallbackUrl = (context.RECORDING_STATUS_CALLBACK_URL || '').trim();
+  var conferenceOptions = {
+    startConferenceOnEnter: true,
+    endConferenceOnExit: true,
+    beep: false,
+    waitUrl: waitUrl,
+    waitMethod: 'POST',
+    record: 'record-from-start',
+    statusCallback: statusCallbackUrl,
+    statusCallbackEvent: 'start end join leave',
+    statusCallbackMethod: 'POST'
+  };
+
+  if (recordingStatusCallbackUrl) {
+    conferenceOptions.recordingStatusCallback = recordingStatusCallbackUrl;
+    conferenceOptions.recordingStatusCallbackMethod = 'POST';
+    conferenceOptions.recordingStatusCallbackEvent = 'completed';
+  }
 
   var dial = twiml.dial();
   dial.conference(
-    {
-      startConferenceOnEnter: true,
-      endConferenceOnExit: true,
-      beep: false,
-      waitUrl: waitUrl,
-      waitMethod: 'POST',
-      statusCallback: statusCallbackUrl,
-      statusCallbackEvent: 'start end join leave',
-      statusCallbackMethod: 'POST'
-    },
+    conferenceOptions,
     conferenceName
   );
 
