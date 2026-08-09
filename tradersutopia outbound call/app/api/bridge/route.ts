@@ -14,11 +14,12 @@ function handleBridge(req: NextRequest) {
   const leadPhone = req.nextUrl.searchParams.get("lead") || "";
   const leadId = req.nextUrl.searchParams.get("leadId") || "manual";
   const affiliatePhone = req.nextUrl.searchParams.get("affiliatePhone") || "";
+  const fromNumber = req.nextUrl.searchParams.get("fromNumber") || "";
   const fullUrl = req.nextUrl.toString();
 
   console.log(`[bridge] lead=${leadPhone}, url=${fullUrl}`);
 
-  if (!leadPhone || !isE164(leadPhone)) {
+  if (!leadPhone || !isE164(leadPhone) || (fromNumber && !isE164(fromNumber))) {
     console.warn("[bridge] Invalid or missing lead phone");
     const xml = buildErrorTwiml("Sorry, something went wrong. The lead number is missing.");
     return new NextResponse(xml, {
@@ -31,6 +32,7 @@ function handleBridge(req: NextRequest) {
     publicBaseUrl: getPublicBaseUrl(req.headers.get("host")),
     leadId,
     affiliatePhone,
+    fromNumber,
   });
   return new NextResponse(xml, {
     status: 200,

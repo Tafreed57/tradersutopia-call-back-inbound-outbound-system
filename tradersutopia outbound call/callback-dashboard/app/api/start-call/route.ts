@@ -10,6 +10,7 @@ import { startBridgeCall, isE164 } from "@/lib/twilio";
 import { isEmergencyNumber } from "@/lib/emergency";
 import { validateAccessCode } from "@/lib/access";
 import { getPublicBaseUrl, isLocalBaseUrl } from "@/lib/base-url";
+import { resolveOutboundLine } from "@/lib/call-routing";
 import { v4 as uuidv4 } from "uuid";
 
 export const runtime = "nodejs";
@@ -86,11 +87,13 @@ export async function POST(req: NextRequest) {
     console.log(`[start-call] Affiliate: ${affiliatePhone} → Lead: ${lead.phone} (${lead.name})`);
 
     // ── Initiate Twilio bridge call ──
+    const line = await resolveOutboundLine(lead.calledNumber);
     const { callSid } = await startBridgeCall({
       affiliatePhone,
       leadPhone: lead.phone,
       leadId: lead.id,
       publicBaseUrl,
+      fromNumber: line.phone,
     });
 
     console.log(`[start-call] Call created: ${callSid}`);
@@ -101,13 +104,20 @@ export async function POST(req: NextRequest) {
       action: "CALL_DIALED",
       leadId: lead.id,
       affiliatePhone,
-      details: JSON.stringify({ leadName: lead.name, leadPhone: lead.phone }),
+      details: JSON.stringify({
+        leadName: lead.name,
+        leadPhone: lead.phone,
+        fromNumber: line.phone,
+        lineLabel: line.label,
+      }),
       twilioCallSid: callSid,
     });
 
     return NextResponse.json({
       ok: true,
       callSid,
+      fromNumber: line.phone,
+      lineLabel: line.label,
       message: "Calling your phone first. Pick up to connect the lead.",
     });
   } catch (err: unknown) {

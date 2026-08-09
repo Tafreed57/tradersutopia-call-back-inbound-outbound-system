@@ -9,13 +9,14 @@ import { startBridgeCall, isE164 } from "@/lib/twilio";
 import { isEmergencyNumber } from "@/lib/emergency";
 import { validateAccessCode } from "@/lib/access";
 import { getPublicBaseUrl, isLocalBaseUrl } from "@/lib/base-url";
+import { resolveOutboundLine } from "@/lib/call-routing";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { affiliatePhone, leadPhone, accessCode } = body;
+    const { affiliatePhone, leadPhone, accessCode, fromNumber } = body;
 
     const auth = validateAccessCode(accessCode);
     if (!auth.ok) {
@@ -83,17 +84,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const line = await resolveOutboundLine(
+      typeof fromNumber === "string" ? fromNumber : undefined
+    );
     const { callSid } = await startBridgeCall({
       affiliatePhone,
       leadPhone: normalizedLead,
       leadId: "manual",
       publicBaseUrl,
+      fromNumber: line.phone,
     });
 
     console.log(`[dial-number] Manual dial: ${affiliatePhone} → ${normalizedLead}`);
     return NextResponse.json({
       ok: true,
       callSid,
+      fromNumber: line.phone,
+      lineLabel: line.label,
       message: "Calling your phone first. Pick up to connect the number.",
     });
   } catch (err: unknown) {

@@ -15,6 +15,23 @@ interface Lead {
   calledBy: string;
   notes: string;
   lastUpdatedAt: string;
+  calledNumber: string;
+}
+
+interface RoutingAgent {
+  phone: string;
+  label: string;
+  enabled: boolean;
+  updatedAt: string;
+}
+
+interface RoutingLine {
+  phone: string;
+  label: string;
+  enabled: boolean;
+  isDefault: boolean;
+  twilioSid: string;
+  updatedAt: string;
 }
 
 interface LiveCall {
@@ -82,6 +99,19 @@ export default function DashboardPage() {
   const [manualNumber, setManualNumber] = useState("");
   const [manualMsg, setManualMsg] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [manualDialing, setManualDialing] = useState(false);
+  const [manualFromNumber, setManualFromNumber] = useState("");
+
+  // Dashboard-managed call routing
+  const [routingAgents, setRoutingAgents] = useState<RoutingAgent[]>([]);
+  const [routingLines, setRoutingLines] = useState<RoutingLine[]>([]);
+  const [routingOpen, setRoutingOpen] = useState(false);
+  const [routingLoading, setRoutingLoading] = useState(false);
+  const [routingBusy, setRoutingBusy] = useState("");
+  const [routingError, setRoutingError] = useState("");
+  const [newAgentPhone, setNewAgentPhone] = useState("");
+  const [newAgentLabel, setNewAgentLabel] = useState("");
+  const [newLinePhone, setNewLinePhone] = useState("");
+  const [newLineLabel, setNewLineLabel] = useState("");
 
   // Live calls
   const [liveCalls, setLiveCalls] = useState<LiveCall[]>([]);
@@ -402,10 +432,134 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [isAuth, phoneSet, fetchRecordings]);
 
+  const applyRoutingData = useCallback((data: {
+    agents?: RoutingAgent[];
+    lines?: RoutingLine[];
+  }) => {
+    const agents = Array.isArray(data.agents) ? data.agents : [];
+    const lines = Array.isArray(data.lines) ? data.lines : [];
+    setRoutingAgents(agents);
+    setRoutingLines(lines);
+    setManualFromNumber((current) => {
+      if (lines.some((line) => line.enabled && line.phone === current)) return current;
+      return lines.find((line) => line.enabled && line.isDefault)?.phone ||
+        lines.find((line) => line.enabled)?.phone || "";
+    });
+  }, []);
+
+  const fetchRouting = useCallback(async () => {
+    setRoutingLoading(true);
+    try {
+      const params = new URLSearchParams({
+        accessCode: getStoredAccessCode(),
+        t: String(Date.now()),
+      });
+      const res = await fetch(`/api/call-routing?${params}`, { cache: "no-store" });
+      const data = await res.json();
+      if (res.status === 401) {
+        resetAuth(data.error);
+        return;
+      }
+      if (!data.ok) throw new Error(data.error || "Unable to load call routing.");
+      applyRoutingData(data);
+      setRoutingError("");
+    } catch (error) {
+      setRoutingError(error instanceof Error ? error.message : "Unable to load call routing.");
+    } finally {
+      setRoutingLoading(false);
+    }
+  }, [applyRoutingData, getStoredAccessCode, resetAuth]);
+
+  useEffect(() => {
+    if (!isAuth || !phoneSet) return;
+    const timer = window.setTimeout(() => void fetchRouting(), 0);
+    const interval = window.setInterval(fetchRouting, 30000);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+    };
+  }, [isAuth, phoneSet, fetchRouting]);
+
+  async function updateRouting(
+    busyKey: string,
+    payload: Record<string, string | boolean>
+  ): Promise<boolean> {
+    setRoutingBusy(busyKey);
+    setRoutingError("");
+    try {
+      const res = await fetch("/api/call-routing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, accessCode: getStoredAccessCode() }),
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        resetAuth(data.error);
+        return false;
+      }
+      if (!data.ok) throw new Error(data.error || "Unable to update call routing.");
+      applyRoutingData(data);
+      return true;
+    } catch (error) {
+      setRoutingError(error instanceof Error ? error.message : "Unable to update call routing.");
+      return false;
+    } finally {
+      setRoutingBusy("");
+    }
+  }
+
+  async function handleToggleCurrentAgent() {
+    const existing = routingAgents.find((agent) => agent.phone === affiliatePhone);
+    await updateRouting(`agent:${affiliatePhone}`, {
+      type: "agent",
+      phone: affiliatePhone,
+      label: existing?.label || "My phone",
+      enabled: !existing?.enabled,
+    });
+  }
+
+  async function handleAddAgent() {
+    const phone = normalizePhone(newAgentPhone);
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+      setRoutingError("Enter the agent phone in E.164 format.");
+      return;
+    }
+    const saved = await updateRouting(`agent:${phone}`, {
+      type: "agent",
+      phone,
+      label: newAgentLabel.trim() || "Agent",
+      enabled: true,
+    });
+    if (saved) {
+      setNewAgentPhone("");
+      setNewAgentLabel("");
+    }
+  }
+
+  async function handleAddLine() {
+    const phone = normalizePhone(newLinePhone);
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+      setRoutingError("Enter the Twilio line in E.164 format.");
+      return;
+    }
+    const saved = await updateRouting(`line:${phone}`, {
+      type: "line",
+      phone,
+      label: newLineLabel.trim() || "Inbound line",
+      enabled: true,
+      configureTwilio: true,
+    });
+    if (saved) {
+      setNewLinePhone("");
+      setNewLineLabel("");
+    }
+  }
+
   function handleRefresh() {
     void fetchLeads();
     void fetchLiveCalls();
     void fetchRecordings();
+    void fetchRouting();
   }
 
   async function handleToggleFavorite(recording: CallRecording) {
@@ -623,6 +777,7 @@ export default function DashboardPage() {
         body: JSON.stringify({
           affiliatePhone,
           leadPhone: withPlus,
+          fromNumber: manualFromNumber,
           accessCode: getStoredAccessCode(),
         }),
       });
@@ -630,7 +785,12 @@ export default function DashboardPage() {
       if (res.status === 401) {
         resetAuth(data.error);
       } else if (data.ok) {
-        setManualMsg({ msg: data.message || "Calling your phone first. Pick up to connect.", type: "ok" });
+        setManualMsg({
+          msg: data.lineLabel
+            ? `Calling your phone first from ${data.lineLabel}.`
+            : data.message || "Calling your phone first. Pick up to connect.",
+          type: "ok",
+        });
         setManualNumber("");
       } else {
         setManualMsg({ msg: data.error || "Failed to dial", type: "err" });
@@ -715,6 +875,16 @@ export default function DashboardPage() {
     recordingsView === "favorites"
       ? recordings.filter((recording) => recording.isFavorite)
       : recordings;
+  const activeRoutingLines = routingLines.filter((line) => line.enabled);
+  const currentRoutingAgent = routingAgents.find(
+    (agent) => agent.phone === affiliatePhone
+  );
+  const receivingCalls = currentRoutingAgent?.enabled === true;
+
+  function leadLineLabel(calledNumber: string): string {
+    if (!calledNumber) return "Default";
+    return routingLines.find((line) => line.phone === calledNumber)?.label || calledNumber;
+  }
 
   // ── MAIN DASHBOARD ──────────────────────────────────────────────────────────
   return (
@@ -730,7 +900,33 @@ export default function DashboardPage() {
             </button>
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={receivingCalls}
+            onClick={() => void handleToggleCurrentAgent()}
+            disabled={routingBusy === `agent:${affiliatePhone}` || routingLoading}
+            className={`px-3 py-1.5 text-sm rounded-lg transition disabled:opacity-50 ${
+              receivingCalls
+                ? "bg-emerald-700 hover:bg-emerald-600 text-white"
+                : "bg-amber-700 hover:bg-amber-600 text-white"
+            }`}
+            title={receivingCalls ? "Pause inbound calls to this phone" : "Receive inbound calls on this phone"}
+          >
+            {routingBusy === `agent:${affiliatePhone}`
+              ? "Updating..."
+              : receivingCalls
+                ? "Receiving Calls"
+                : "Calls Paused"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setRoutingOpen((open) => !open)}
+            className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 rounded-lg transition"
+          >
+            Routing
+          </button>
           {pushSupported && (
             <button
               onClick={pushSubscribed ? handleDisablePush : handleEnablePush}
@@ -774,9 +970,183 @@ export default function DashboardPage() {
         </div>
       </header>
 
+      {routingOpen && (
+        <section className="border-b border-slate-700 bg-slate-900/70">
+          <div className="px-4 py-3 flex flex-wrap items-center gap-3 border-b border-slate-800">
+            <h2 className="text-sm font-semibold text-white">Call Routing</h2>
+            <span className="text-xs text-slate-400">
+              {routingAgents.filter((agent) => agent.enabled).length} agents active
+            </span>
+            <button
+              type="button"
+              onClick={() => void fetchRouting()}
+              disabled={routingLoading}
+              className="ml-auto px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 rounded-lg disabled:opacity-50"
+            >
+              {routingLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          {routingError && (
+            <p className="px-4 pt-3 text-sm text-red-400">{routingError}</p>
+          )}
+
+          <div className="grid md:grid-cols-2">
+            <div className="px-4 py-4 md:border-r border-slate-800">
+              <h3 className="text-xs uppercase text-slate-400 mb-3">Twilio Lines</h3>
+              <div className="divide-y divide-slate-800 border-y border-slate-800">
+                {routingLines.map((line) => (
+                  <div key={line.phone} className="py-3 flex flex-wrap items-center gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-white truncate">
+                        {line.label}
+                        {line.isDefault && (
+                          <span className="ml-2 text-[10px] uppercase text-blue-300">Default</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-slate-400 font-mono">{line.phone}</p>
+                    </div>
+                    {!line.isDefault && line.enabled && (
+                      <button
+                        type="button"
+                        onClick={() => void updateRouting(`line:${line.phone}`, {
+                          type: "line",
+                          phone: line.phone,
+                          isDefault: true,
+                        })}
+                        disabled={routingBusy === `line:${line.phone}`}
+                        className="text-xs text-blue-300 hover:text-blue-200 disabled:opacity-50"
+                      >
+                        Make default
+                      </button>
+                    )}
+                    <RoutingToggle
+                      enabled={line.enabled}
+                      busy={routingBusy === `line:${line.phone}`}
+                      label={`${line.label} line`}
+                      onChange={() => void updateRouting(`line:${line.phone}`, {
+                        type: "line",
+                        phone: line.phone,
+                        enabled: !line.enabled,
+                      })}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 grid sm:grid-cols-[1fr_1fr_auto] gap-2">
+                <input
+                  type="text"
+                  value={newLineLabel}
+                  onChange={(event) => setNewLineLabel(event.target.value)}
+                  placeholder="Line name"
+                  className="min-w-0 px-3 py-2 text-sm bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                />
+                <input
+                  type="tel"
+                  value={newLinePhone}
+                  onChange={(event) => setNewLinePhone(event.target.value)}
+                  placeholder="+18445551234"
+                  className="min-w-0 px-3 py-2 text-sm font-mono bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleAddLine()}
+                  disabled={!newLinePhone.trim() || routingBusy.startsWith("line:")}
+                  className="px-3 py-2 text-sm bg-blue-600 hover:bg-blue-500 rounded-lg disabled:opacity-50"
+                >
+                  Add line
+                </button>
+              </div>
+            </div>
+
+            <div className="px-4 py-4">
+              <h3 className="text-xs uppercase text-slate-400 mb-3">Inbound Agents</h3>
+              <div className="divide-y divide-slate-800 border-y border-slate-800">
+                {routingAgents.map((agent) => (
+                  <div key={agent.phone} className="py-3 flex flex-wrap items-center gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-white truncate">
+                        {agent.label}
+                        {agent.phone === affiliatePhone && (
+                          <span className="ml-2 text-[10px] uppercase text-blue-300">This phone</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-slate-400 font-mono">{agent.phone}</p>
+                    </div>
+                    <RoutingToggle
+                      enabled={agent.enabled}
+                      busy={routingBusy === `agent:${agent.phone}`}
+                      label={agent.label}
+                      onChange={() => void updateRouting(`agent:${agent.phone}`, {
+                        type: "agent",
+                        phone: agent.phone,
+                        enabled: !agent.enabled,
+                      })}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void updateRouting(`agent:${agent.phone}`, {
+                        action: "remove",
+                        type: "agent",
+                        phone: agent.phone,
+                      })}
+                      disabled={routingBusy === `agent:${agent.phone}`}
+                      className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 grid sm:grid-cols-[1fr_1fr_auto] gap-2">
+                <input
+                  type="text"
+                  value={newAgentLabel}
+                  onChange={(event) => setNewAgentLabel(event.target.value)}
+                  placeholder="Agent name"
+                  className="min-w-0 px-3 py-2 text-sm bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                />
+                <input
+                  type="tel"
+                  value={newAgentPhone}
+                  onChange={(event) => setNewAgentPhone(event.target.value)}
+                  placeholder="+14375551234"
+                  className="min-w-0 px-3 py-2 text-sm font-mono bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleAddAgent()}
+                  disabled={!newAgentPhone.trim() || routingBusy.startsWith("agent:")}
+                  className="px-3 py-2 text-sm bg-blue-600 hover:bg-blue-500 rounded-lg disabled:opacity-50"
+                >
+                  Add agent
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Manual dial (keypad) */}
       <div className="px-4 py-3 border-b border-slate-800 bg-slate-900/50">
-        <p className="text-slate-400 text-xs uppercase tracking-wider mb-2">Dial any number</p>
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <p className="text-slate-400 text-xs uppercase tracking-wider">Dial any number</p>
+          <label className="ml-auto flex items-center gap-2 text-xs text-slate-400">
+            From
+            <select
+              value={manualFromNumber}
+              onChange={(event) => setManualFromNumber(event.target.value)}
+              disabled={activeRoutingLines.length === 0}
+              className="max-w-[220px] px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500 disabled:opacity-50"
+            >
+              {activeRoutingLines.map((line) => (
+                <option key={line.phone} value={line.phone}>
+                  {line.label} ({line.phone})
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <div className="flex flex-col sm:flex-row gap-2 mb-3">
           <input
             type="tel"
@@ -1110,6 +1480,7 @@ export default function DashboardPage() {
                   <th className="text-left py-2 px-2">Name</th>
                   <th className="text-left py-2 px-2">Phone</th>
                   <th className="text-left py-2 px-2">Reason</th>
+                  <th className="text-left py-2 px-2">Line</th>
                   <th className="text-left py-2 px-2">Status</th>
                   <th className="text-left py-2 px-2">Created</th>
                   <th className="text-left py-2 px-2">Notes</th>
@@ -1121,6 +1492,7 @@ export default function DashboardPage() {
                   <LeadRow
                     key={lead.id}
                     lead={lead}
+                    lineLabel={leadLineLabel(lead.calledNumber)}
                     onCall={handleCall}
                     onMark={handleMarkStatus}
                     onSaveNotes={handleSaveNotes}
@@ -1140,6 +1512,7 @@ export default function DashboardPage() {
             <LeadCard
               key={lead.id}
               lead={lead}
+              lineLabel={leadLineLabel(lead.calledNumber)}
               onCall={handleCall}
               onMark={handleMarkStatus}
               onSaveNotes={handleSaveNotes}
@@ -1155,8 +1528,42 @@ export default function DashboardPage() {
 }
 
 // ── Desktop Row Component ─────────────────────────────────────────────────────
+function RoutingToggle({
+  enabled,
+  busy,
+  label,
+  onChange,
+}: {
+  enabled: boolean;
+  busy: boolean;
+  label: string;
+  onChange: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      aria-label={`${enabled ? "Disable" : "Enable"} ${label}`}
+      title={`${enabled ? "Disable" : "Enable"} ${label}`}
+      onClick={onChange}
+      disabled={busy}
+      className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50 ${
+        enabled ? "bg-emerald-600" : "bg-slate-600"
+      }`}
+    >
+      <span
+        className={`absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform ${
+          enabled ? "translate-x-5" : "translate-x-0"
+        }`}
+      />
+    </button>
+  );
+}
+
 function LeadRow({
   lead,
+  lineLabel,
   onCall,
   onMark,
   onSaveNotes,
@@ -1165,6 +1572,7 @@ function LeadRow({
   dialed,
 }: {
   lead: Lead;
+  lineLabel: string;
   onCall: (l: Lead) => void;
   onMark: (l: Lead, status: string) => void;
   onSaveNotes: (l: Lead, notes: string) => void;
@@ -1185,6 +1593,7 @@ function LeadRow({
       <td className="py-3 px-2 font-medium">{lead.name}</td>
       <td className="py-3 px-2 text-slate-300 font-mono text-xs">{lead.phone}</td>
       <td className="py-3 px-2 text-slate-400 max-w-[150px] truncate">{lead.reason}</td>
+      <td className="py-3 px-2 text-slate-400 text-xs">{lineLabel}</td>
       <td className="py-3 px-2">
         <div className="flex items-center gap-1.5">
           <StatusBadge status={lead.status} />
@@ -1274,6 +1683,7 @@ function LeadRow({
 // ── Mobile Card Component ─────────────────────────────────────────────────────
 function LeadCard({
   lead,
+  lineLabel,
   onCall,
   onMark,
   onSaveNotes,
@@ -1282,6 +1692,7 @@ function LeadCard({
   dialed,
 }: {
   lead: Lead;
+  lineLabel: string;
   onCall: (l: Lead) => void;
   onMark: (l: Lead, status: string) => void;
   onSaveNotes: (l: Lead, notes: string) => void;
@@ -1317,6 +1728,7 @@ function LeadCard({
       {lead.reason && (
         <p className="text-slate-400 text-sm mb-2">{lead.reason}</p>
       )}
+      <p className="text-slate-500 text-xs mb-2">Line: {lineLabel}</p>
 
       <p className="text-slate-500 text-xs mb-3">
         {formatDate(lead.createdAt)}

@@ -21,9 +21,61 @@
  *   FROM_NUMBER  – Twilio voice-capable number for caller-ID
  *
  * OPTIONAL env vars:
- *   AGENT_LIST   – comma-separated E.164 numbers  (fallback: hard-coded list)
+ *   AGENT_LIST   – comma-separated E.164 numbers used only before dashboard routing is configured
  *   BASE_URL     – override domain  (fallback: https://<DOMAIN_NAME>)
  */
+async function loadCallRouting(context, calledNumber, log) {
+  var fallbackAgents = (context.AGENT_LIST || '')
+    .split(',').map(function (number) { return number.trim(); }).filter(Boolean);
+  var fallbackFrom = calledNumber || (context.FROM_NUMBER || '').trim();
+  var endpoint = (context.CALL_ROUTING_URL || '').trim();
+  var secret = (context.CALL_ROUTING_SECRET || '').trim();
+
+  if (!endpoint || !secret) {
+    log('warn', 'ROUTING_ENV_FALLBACK', { reason: 'runtime endpoint or secret is missing' });
+    return { agents: fallbackAgents, fromNumber: fallbackFrom, source: 'environment' };
+  }
+
+  try {
+    var https = require('https');
+    var url = new URL(endpoint);
+    url.searchParams.set('calledNumber', calledNumber || '');
+    var response = await new Promise(function (resolve, reject) {
+      var req = https.request({
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: url.pathname + url.search,
+        method: 'GET',
+        headers: { 'x-call-routing-secret': secret },
+        timeout: 4000
+      }, function (res) {
+        var body = '';
+        res.on('data', function (chunk) { body += chunk; });
+        res.on('end', function () { resolve({ statusCode: res.statusCode, body: body }); });
+      });
+      req.on('error', reject);
+      req.on('timeout', function () { req.destroy(); reject(new Error('Routing request timed out')); });
+      req.end();
+    });
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw new Error('Routing API returned ' + response.statusCode);
+    }
+
+    var data = JSON.parse(response.body || '{}');
+    if (!data.ok || !Array.isArray(data.agents)) throw new Error('Invalid routing response');
+    var agents = data.agents
+      .map(function (number) { return String(number).trim(); })
+      .filter(function (number) { return /^\+[1-9]\d{7,14}$/.test(number); });
+    var fromNumber = String(data.fromNumber || fallbackFrom).trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(fromNumber)) throw new Error('Invalid routing caller ID');
+    log('info', 'ROUTING_LOADED', { source: 'dashboard', agentCount: agents.length, fromNumber: fromNumber });
+    return { agents: agents, fromNumber: fromNumber, source: 'dashboard' };
+  } catch (error) {
+    log('error', 'ROUTING_API_UNAVAILABLE', { message: error.message });
+    return { agents: [], fromNumber: fallbackFrom, source: 'dashboard_unavailable' };
+  }
+}
+
 exports.handler = async function (context, event, callback) {
   // ── RAW EVENT DUMP (diagnostic — check Twilio Live Logs) ───────────
   console.log("RAW_EVENT=" + JSON.stringify(event));
@@ -96,16 +148,40 @@ exports.handler = async function (context, event, callback) {
   }
 
   // ── Agent list (env-configurable, comma-separated) ─────────────────
-  var agentRaw = context.AGENT_LIST || '+14375505339,+14372365634';
-  var AGENTS = agentRaw.split(',').map(function (n) { return n.trim(); }).filter(Boolean);
+  if ((!callerNumber || !calledNumber) && callerCallSid) {
+    try {
+      var callerCall = await context.getTwilioClient().calls(callerCallSid).fetch();
+      if (!callerNumber) callerNumber = (callerCall.from || '').trim();
+      if (!calledNumber) calledNumber = (callerCall.to || '').trim();
+      correlation.callerNumber = callerNumber;
+      correlation.calledNumber = calledNumber;
+      log('info', 'CALLER_LOOKUP_OK', { callerCallSid: callerCallSid });
+    } catch (lookupError) {
+      log('warn', 'CALLER_LOOKUP_FAILED', {
+        callerCallSid: callerCallSid,
+        message: lookupError.message
+      });
+    }
+  }
+
+  var routing = await loadCallRouting(context, calledNumber, log);
+  var AGENTS = routing.agents;
+  var FROM_NUMBER = routing.fromNumber;
 
   if (AGENTS.length === 0) {
-    log('error', 'NO_AGENTS', { message: 'AGENT_LIST resolved to empty array' });
-    return callback(null, { ok: false, error: 'No agents configured' });
+    log('warn', 'NO_AGENTS', { source: routing.source });
+    return callback(null, {
+      ok: true,
+      conferenceName: conferenceName,
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+      callSids: [],
+      noAgentsAvailable: true
+    });
   }
 
   // ── FROM number ────────────────────────────────────────────────────
-  var FROM_NUMBER = (context.FROM_NUMBER || '').trim();
   if (!FROM_NUMBER) {
     log('error', 'MISSING_ENV', { missing: 'FROM_NUMBER' });
     return callback(null, { ok: false, error: 'Environment variable FROM_NUMBER is not set' });
@@ -117,7 +193,8 @@ exports.handler = async function (context, event, callback) {
     + '?conferenceName=' + encodeURIComponent(conferenceName)
     + '&callerCallSid=' + encodeURIComponent(callerCallSid)
     + '&callerNumber=' + encodeURIComponent(callerNumber)
-    + '&calledNumber=' + encodeURIComponent(calledNumber);
+    + '&calledNumber=' + encodeURIComponent(calledNumber)
+    + '&routingAgents=' + encodeURIComponent(AGENTS.join(','));
   log('info', 'CONFIG', { baseUrl: baseUrl, whisperUrl: whisperUrl, agentCount: AGENTS.length });
 
   // ── Atomic agent availability check ───────────────────────────────

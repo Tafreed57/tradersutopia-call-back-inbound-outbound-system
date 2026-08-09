@@ -22,6 +22,58 @@
  *   AGENT_LIST          – comma-separated agent phone numbers
  *   FROM_NUMBER         – Twilio number to call agents from
  */
+async function loadCallRouting(context, calledNumber, log) {
+  var fallbackAgents = (context.AGENT_LIST || '')
+    .split(',').map(function (number) { return number.trim(); }).filter(Boolean);
+  var fallbackFrom = calledNumber || (context.FROM_NUMBER || '').trim();
+  var endpoint = (context.CALL_ROUTING_URL || '').trim();
+  var secret = (context.CALL_ROUTING_SECRET || '').trim();
+
+  if (!endpoint || !secret) {
+    log('warn', 'ROUTING_ENV_FALLBACK', { reason: 'runtime endpoint or secret is missing' });
+    return { agents: fallbackAgents, fromNumber: fallbackFrom, source: 'environment' };
+  }
+
+  try {
+    var https = require('https');
+    var url = new URL(endpoint);
+    url.searchParams.set('calledNumber', calledNumber || '');
+    var response = await new Promise(function (resolve, reject) {
+      var req = https.request({
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: url.pathname + url.search,
+        method: 'GET',
+        headers: { 'x-call-routing-secret': secret },
+        timeout: 4000
+      }, function (res) {
+        var body = '';
+        res.on('data', function (chunk) { body += chunk; });
+        res.on('end', function () { resolve({ statusCode: res.statusCode, body: body }); });
+      });
+      req.on('error', reject);
+      req.on('timeout', function () { req.destroy(); reject(new Error('Routing request timed out')); });
+      req.end();
+    });
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw new Error('Routing API returned ' + response.statusCode);
+    }
+
+    var data = JSON.parse(response.body || '{}');
+    if (!data.ok || !Array.isArray(data.agents)) throw new Error('Invalid routing response');
+    var agents = data.agents
+      .map(function (number) { return String(number).trim(); })
+      .filter(function (number) { return /^\+[1-9]\d{7,14}$/.test(number); });
+    var fromNumber = String(data.fromNumber || fallbackFrom).trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(fromNumber)) throw new Error('Invalid routing caller ID');
+    log('info', 'ROUTING_LOADED', { source: 'dashboard', agentCount: agents.length, fromNumber: fromNumber });
+    return { agents: agents, fromNumber: fromNumber, source: 'dashboard' };
+  } catch (error) {
+    log('error', 'ROUTING_API_UNAVAILABLE', { message: error.message });
+    return { agents: [], fromNumber: fallbackFrom, source: 'dashboard_unavailable' };
+  }
+}
+
 exports.handler = async function (context, event, callback) {
   var requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   var FN = 'timeout_action';
@@ -117,9 +169,9 @@ exports.handler = async function (context, event, callback) {
     log('info', 'RETRY_AGENTS', { newConferenceName: newConferenceName });
 
     // Ring agents (same logic as simulring_agents)
-    var fromNumber = (context.FROM_NUMBER || '').trim();
-    var agentListRaw = (context.AGENT_LIST || '+14375505339,+14372365634').trim();
-    var agents = agentListRaw.split(',').map(function (n) { return n.trim(); }).filter(Boolean);
+    var routing = await loadCallRouting(context, calledNumber, log);
+    var fromNumber = routing.fromNumber;
+    var agents = routing.agents;
 
     if (!fromNumber) {
       log('error', 'MISSING_FROM_NUMBER', {});
@@ -132,7 +184,8 @@ exports.handler = async function (context, event, callback) {
       + '?conferenceName=' + encodeURIComponent(newConferenceName)
       + '&callerCallSid=' + encodeURIComponent(callSid)
       + '&callerNumber=' + encodeURIComponent(callerNumber)
-      + '&calledNumber=' + encodeURIComponent(calledNumber);
+      + '&calledNumber=' + encodeURIComponent(calledNumber)
+      + '&routingAgents=' + encodeURIComponent(agents.join(','));
     var client = context.getTwilioClient();
     var syncSid = (context.SYNC_SERVICE_SID || '').trim();
     var SYNC_MAP = 'call_routing';
@@ -246,7 +299,10 @@ exports.handler = async function (context, event, callback) {
     }
 
     // Redirect caller to join the new conference
-    var joinUrl = baseUrl + '/join_conference?conferenceName=' + encodeURIComponent(newConferenceName);
+    var joinUrl = baseUrl + '/join_conference?conferenceName=' + encodeURIComponent(newConferenceName)
+      + '&callSid=' + encodeURIComponent(callSid)
+      + '&callerNumber=' + encodeURIComponent(callerNumber)
+      + '&calledNumber=' + encodeURIComponent(calledNumber);
     log('info', 'RETRY_REDIRECTING', { joinUrl: joinUrl });
     twiml.redirect({ method: 'POST' }, joinUrl);
 

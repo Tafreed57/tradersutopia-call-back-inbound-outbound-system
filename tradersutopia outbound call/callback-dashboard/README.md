@@ -30,6 +30,10 @@ Copy `.env.example` to `.env.local` and fill in:
 TWILIO_SID=AC...
 TWILIO_AUTH=...
 TWILIO_NUMBER=+18555077602
+TWILIO_NUMBERS=+18555077602,+18444844459
+TWILIO_NUMBER_LABELS=Cancellation,Sales
+CALL_ROUTING_DEFAULT_AGENTS=+14375551234
+CALL_ROUTING_SECRET=generate_a_long_random_secret
 GOOGLE_SHEET_ID=your_spreadsheet_id
 GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...entire JSON...}
 AFFILIATE_ACCESS_CODE=traders2026
@@ -91,6 +95,11 @@ Restart the dev server after changing `.env.local`.
    | `TWILIO_SID` | `AC6fc4fffe...` (your Twilio SID) |
    | `TWILIO_AUTH` | `bfc718bf...` (your Twilio auth token) |
    | `TWILIO_NUMBER` | `+18555077602` |
+   | `TWILIO_NUMBERS` | Comma-separated Twilio voice lines |
+   | `TWILIO_NUMBER_LABELS` | Matching dashboard labels, such as `Cancellation,Sales` |
+   | `CALL_ROUTING_DEFAULT_AGENTS` | Initial comma-separated agent list; the dashboard owns updates after seeding |
+   | `CALL_ROUTING_SECRET` | Random shared secret also set in Twilio Functions |
+   | `TWILIO_STUDIO_FLOW_URL` | Production Studio Flow webhook copied to newly added lines |
    | `GOOGLE_SHEET_ID` | `1LI71rRt...` (your Sheet ID) |
    | `GOOGLE_SHEET_CALLBACKS_TAB` | `Callback Queue` |
    | `GOOGLE_SHEET_LOGS_TAB` | `CallLogs` |
@@ -108,6 +117,7 @@ Restart the dev server after changing `.env.local`.
 1. Open your Vercel URL → `/dashboard`
 2. Log in with access code
 3. Enter your phone number
+4. Open **Routing** to enable or pause agents, select the default line, or add another owned Twilio number.
 4. You should see your leads from Google Sheets
 5. Click "Mark Called" on a lead → status updates instantly on dashboard AND in Google Sheets
 6. Click "Call" on a lead → your phone rings → answer → you hear "Connecting you to your callback" → lead's phone rings

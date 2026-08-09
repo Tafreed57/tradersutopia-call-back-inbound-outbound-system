@@ -170,7 +170,7 @@ This project showcases:
 
 1. Open the **tradersutopia inboundcall workflow** folder.
 2. Copy the Functions into your Twilio project (e.g. via Console or Twilio CLI).
-3. Set environment variables: `FROM_NUMBER`, `AGENT_LIST`, optionally `SYNC_SERVICE_SID`, `BASE_URL`, `MAX_WAIT_MS`, `SMS_FROM_NUMBER`, `CALLBACK_SCRIPT_URL`, `RECORDING_STATUS_CALLBACK_URL`.
+3. Set environment variables: `FROM_NUMBER`, `AGENT_LIST`, `CALL_ROUTING_URL`, `CALL_ROUTING_SECRET`, optionally `FROM_NUMBERS`, `SYNC_SERVICE_SID`, `BASE_URL`, `MAX_WAIT_MS`, `SMS_FROM_NUMBER`, `CALLBACK_SCRIPT_URL`, `RECORDING_STATUS_CALLBACK_URL`.
 4. In Studio: configure the flow to set `conferenceName` (e.g. `TU_{CallSid}`), POST to `/simulring_agents`, then TwiML Redirect to `/join_conference`.
 5. See **VOICE_FLOW.md** in that folder for the full behavioral contract.
 
@@ -179,7 +179,7 @@ This project showcases:
 1. Open the **tradersutopia outbound call** folder.
 2. Follow the **README.md** and **SETUP-GOOGLE-CLOUD.md** there: Google Sheet, Service Account JSON, env vars (`TWILIO_*`, `GOOGLE_*`, `AFFILIATE_ACCESS_CODE`, etc.).
 3. Run `npm install` and `npm run dev`; for local Twilio webhooks set `PUBLIC_BASE_URL` to your ngrok URL.
-4. Deploy to Vercel and set the same env vars in the project settings.
+4. Deploy to Vercel and set the same env vars in the project settings. The dashboard stores live agents and Twilio lines in the `Call Routing` sheet; environment lists only seed the initial configuration. Once dashboard routing is configured, routing API errors fail closed so paused agents are never rung from stale environment values.
 
 ---
 

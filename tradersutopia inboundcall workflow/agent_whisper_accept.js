@@ -59,6 +59,7 @@ exports.handler = async function (context, event, callback) {
   }
   var callerNumber = (event.callerNumber || event.CallerNumber || '').trim();
   var calledNumber = (event.calledNumber || event.CalledNumber || '').trim();
+  var routingAgents = (event.routingAgents || '').trim();
 
   console.log("ACCEPT_PARSED_conferenceName=" + conferenceName);
   console.log("ACCEPT_DIGITS=" + digit);
@@ -105,6 +106,7 @@ exports.handler = async function (context, event, callback) {
       + '&callerCallSid=' + encodeURIComponent(callerCallSid)
       + '&callerNumber=' + encodeURIComponent(callerNumber)
       + '&calledNumber=' + encodeURIComponent(calledNumber)
+      + '&routingAgents=' + encodeURIComponent(routingAgents)
       + '&try=1';
     twiml.say('Invalid input.');
     twiml.redirect({ method: 'POST' }, retryWhisperUrl);
@@ -162,7 +164,7 @@ exports.handler = async function (context, event, callback) {
   // Fallback: REST API with call.url filtering (if Sync wasn't used or failed)
   if (!cancelledViaSyncOk) {
     try {
-      var FROM_NUMBER = (context.FROM_NUMBER || '').trim();
+      var FROM_NUMBER = calledNumber || (context.FROM_NUMBER || '').trim();
       if (FROM_NUMBER) {
         var ringingCalls = await client.calls.list({ from: FROM_NUMBER, status: 'ringing', limit: 20 });
         var queuedCalls = await client.calls.list({ from: FROM_NUMBER, status: 'queued', limit: 20 });
@@ -189,7 +191,7 @@ exports.handler = async function (context, event, callback) {
   if (callbackUrl) {
     try {
       var https = require('https');
-      var allAgents = (context.AGENT_LIST || '').split(',').map(function (n) { return n.trim(); }).filter(Boolean);
+      var allAgents = (routingAgents || context.AGENT_LIST || '').split(',').map(function (n) { return n.trim(); }).filter(Boolean);
       var otherAgents = allAgents.filter(function (n) { return n !== agentNumber; });
 
       var postBody = JSON.stringify({
@@ -232,10 +234,10 @@ exports.handler = async function (context, event, callback) {
   }
 
   // ── SMS notify other agents that this agent took the call ─────────
-  var smsFromNumber = (context.SMS_FROM_NUMBER || context.FROM_NUMBER || '').trim();
+  var smsFromNumber = (context.SMS_FROM_NUMBER || calledNumber || context.FROM_NUMBER || '').trim();
   if (smsFromNumber) {
     try {
-      var smsAgentList = (context.AGENT_LIST || '').split(',').map(function (n) { return n.trim(); }).filter(Boolean);
+      var smsAgentList = (routingAgents || context.AGENT_LIST || '').split(',').map(function (n) { return n.trim(); }).filter(Boolean);
       var smsRecipients = smsAgentList.filter(function (n) { return n !== agentNumber; });
 
       if (smsRecipients.length > 0) {

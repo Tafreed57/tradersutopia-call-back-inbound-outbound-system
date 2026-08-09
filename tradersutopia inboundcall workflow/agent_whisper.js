@@ -59,6 +59,7 @@ exports.handler = function (context, event, callback) {
   var callerCallSid = (event.callerCallSid || event.callSid || '').trim();
   var callerNumber = (event.callerNumber || event.CallerNumber || '').trim();
   var calledNumber = (event.calledNumber || event.CalledNumber || '').trim();
+  var routingAgents = (event.routingAgents || '').trim();
   var MAX_TRIES = 2;
 
   var correlation = {
@@ -95,7 +96,8 @@ exports.handler = function (context, event, callback) {
     + '?conferenceName=' + encodeURIComponent(conferenceName)
     + '&callerCallSid=' + encodeURIComponent(callerCallSid)
     + '&callerNumber=' + encodeURIComponent(callerNumber)
-    + '&calledNumber=' + encodeURIComponent(calledNumber);
+    + '&calledNumber=' + encodeURIComponent(calledNumber)
+    + '&routingAgents=' + encodeURIComponent(routingAgents);
 
   // Gather: press 1 to accept (barge-in enabled by default — digits during Say are captured)
   var gather = twiml.gather({
@@ -119,6 +121,7 @@ exports.handler = function (context, event, callback) {
       + '&callerCallSid=' + encodeURIComponent(callerCallSid)
       + '&callerNumber=' + encodeURIComponent(callerNumber)
       + '&calledNumber=' + encodeURIComponent(calledNumber)
+      + '&routingAgents=' + encodeURIComponent(routingAgents)
       + '&try=' + (tryCount + 1);
     twiml.say('No input received.');
     twiml.redirect({ method: 'POST' }, retryUrl);

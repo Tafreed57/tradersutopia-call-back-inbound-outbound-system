@@ -85,6 +85,7 @@ function queueRowToLead(row: SheetCell[], rowIndex: number, normalizeDates = fal
     calledBy: sheetCellToString(row[4]),
     notes: sheetCellToString(row[5]),
     lastUpdatedAt: createdAt,
+    calledNumber: sheetCellToString(row[7]).trim(),
     _rowIndex: rowIndex,
   };
 }
@@ -99,7 +100,7 @@ function leadToQueueRow(lead: Lead): string[] {
     lead.calledBy,
     lead.notes,
     lead.id,
-    "", // called_number
+    lead.calledNumber, // called_number
     "", // digits
   ];
 }
@@ -221,6 +222,7 @@ export interface Lead {
   calledBy: string;
   notes: string;
   lastUpdatedAt: string;
+  calledNumber: string;
   _rowIndex?: number; // 1-based sheet row (header=1, first data=2)
 }
 
@@ -236,6 +238,7 @@ function rowToLead(row: SheetCell[], rowIndex: number, normalizeDates = false): 
     calledBy: sheetCellToString(row[7]),
     notes: sheetCellToString(row[8]),
     lastUpdatedAt: normalizeDates ? normalizeDateValue(row[9]) : sheetCellToString(row[9]),
+    calledNumber: "",
     _rowIndex: rowIndex,
   };
 }

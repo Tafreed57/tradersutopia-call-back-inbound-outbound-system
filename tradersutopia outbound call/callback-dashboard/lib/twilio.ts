@@ -115,20 +115,22 @@ export async function startBridgeCall(opts: {
   leadPhone: string;
   leadId: string;
   publicBaseUrl: string;
+  fromNumber: string;
 }): Promise<{ callSid: string }> {
   const client = getClient();
-  const twilioNumber = getTwilioNumber();
+  const twilioNumber = opts.fromNumber || getTwilioNumber();
 
   const bridgeUrl = `${opts.publicBaseUrl}/api/bridge?lead=${encodeURIComponent(
     opts.leadPhone
   )}&leadId=${encodeURIComponent(opts.leadId || "manual")}&affiliatePhone=${encodeURIComponent(
     opts.affiliatePhone
-  )}`;
+  )}&fromNumber=${encodeURIComponent(twilioNumber)}`;
   const affiliateStatusUrl = statusCallbackUrl(opts.publicBaseUrl, {
     leg: "affiliate",
     leadId: opts.leadId || "manual",
     affiliatePhone: opts.affiliatePhone,
     lead: opts.leadPhone,
+    fromNumber: twilioNumber,
   });
 
   const call = await client.calls.create({
@@ -153,11 +155,12 @@ export function buildBridgeTwiml(
     publicBaseUrl?: string;
     leadId?: string;
     affiliatePhone?: string;
+    fromNumber?: string;
   }
 ): string {
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
-  const twilioNumber = getTwilioNumber();
+  const twilioNumber = opts?.fromNumber || getTwilioNumber();
 
   twiml.say({ voice: "alice", language: "en-US" }, "Connecting you to your callback.");
 
@@ -180,12 +183,14 @@ export function buildBridgeTwiml(
       leadId: opts.leadId || "manual",
       affiliatePhone: opts.affiliatePhone || "",
       lead: leadPhone,
+      fromNumber: twilioNumber,
     });
     dialOptions.recordingStatusCallback = recordingStatusCallbackUrl(opts.publicBaseUrl, {
       source: "outbound_bridge",
       leadId: opts.leadId || "manual",
       affiliatePhone: opts.affiliatePhone || "",
       lead: leadPhone,
+      fromNumber: twilioNumber,
     });
     dialOptions.recordingStatusCallbackEvent = ["completed"];
     dialOptions.recordingStatusCallbackMethod = "POST";
