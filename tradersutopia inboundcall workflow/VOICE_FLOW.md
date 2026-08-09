@@ -72,8 +72,9 @@ Only the first case, timeout with no agent participant, creates an automatic `NE
 ## 7. Call recordings
 
 - `/join_conference` adds `record: 'record-from-start'` to the caller conference. Twilio stores the audio as a conference recording once the caller and an agent are bridged.
+- Twilio starts conference recording only when the first two participants are bridged, so hold audio, no-answer attempts, and missed calls do not produce playable recordings.
 - The recording does not create or update a callback queue row. Callback rows are still controlled only by missed-call timeout and explicit post-conference callback requests.
-- Playback is handled by the Vercel dashboard, which lists Twilio recordings and streams audio through authenticated `/api/recordings` routes.
+- Playback is handled by the Vercel dashboard, which lists successful recordings from the last 7 days and streams audio through authenticated `/api/recordings` routes.
 
 ---
 

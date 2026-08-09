@@ -43,6 +43,11 @@ interface CallRecording {
   callStatus: string;
   startTime: string;
   endTime: string;
+  customerPhone: string;
+  agentPhone: string;
+  answeredBy: string;
+  connectedDuration: number;
+  verification: "conference-bridge" | "human-detected" | "connected-duration";
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -352,6 +357,7 @@ export default function DashboardPage() {
     try {
       const params = new URLSearchParams({
         limit: "50",
+        days: "7",
         accessCode: getStoredAccessCode(),
         t: String(Date.now()),
       });
@@ -386,7 +392,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!isAuth || !phoneSet) return;
-    const interval = setInterval(fetchRecordings, 60000);
+    const interval = setInterval(fetchRecordings, 30000);
     return () => clearInterval(interval);
   }, [isAuth, phoneSet, fetchRecordings]);
 
@@ -842,14 +848,14 @@ export default function DashboardPage() {
             className="flex items-center gap-2 min-w-0 flex-1 text-left"
           >
             <span className="text-slate-400 text-xs uppercase tracking-wider">
-              Recorded Calls
+              Connected Recordings
             </span>
             <span className="text-slate-500 text-xs">
               {recordingsLoading
                 ? "Loading..."
                 : recordings.length > 0
-                  ? `${recordings.length} saved`
-                  : "None"}
+                  ? `${recordings.length} in the last 7 days`
+                  : "Last 7 days: none"}
             </span>
             <span className="text-slate-500 text-xs ml-auto">
               {recordingsOpen ? "Hide" : "Show"}
@@ -872,7 +878,7 @@ export default function DashboardPage() {
             )}
             {!recordingsError && recordings.length === 0 && !recordingsLoading && (
               <p className="text-slate-600 text-sm py-2">
-                No Twilio recordings found yet.
+                No connected call recordings in the last 7 days.
               </p>
             )}
             {recordings.length > 0 && (
@@ -889,7 +895,7 @@ export default function DashboardPage() {
                         </p>
                         <p className="text-slate-500 text-xs">
                           {formatDate(recording.dateCreated)} - {formatRecordingDuration(recording.duration)} -{" "}
-                          {recording.channels === 2 ? "Dual channel" : "Single channel"}
+                          {formatRecordingVerification(recording)}
                         </p>
                         <p className="text-slate-600 text-[11px] font-mono truncate">
                           {recording.conferenceName || recording.callSid || recording.sid}
@@ -1313,13 +1319,22 @@ function formatDate(raw: string): string {
 }
 
 function formatRecordingTitle(recording: CallRecording): string {
-  if (recording.from || recording.to) {
-    return `${recording.from || "Unknown"} -> ${recording.to || "Unknown"}`;
+  if (recording.verification === "conference-bridge" && recording.customerPhone) {
+    return `Inbound call from ${recording.customerPhone}`;
+  }
+  if (recording.agentPhone || recording.customerPhone) {
+    return `${recording.agentPhone || "Agent"} -> ${recording.customerPhone || "Customer"}`;
   }
   if (recording.conferenceName) {
     return `Conference ${recording.conferenceName}`;
   }
   return recording.sid;
+}
+
+function formatRecordingVerification(recording: CallRecording): string {
+  if (recording.verification === "conference-bridge") return "Agent joined conference";
+  if (recording.verification === "human-detected") return "Human answer verified";
+  return "Connected call";
 }
 
 function formatRecordingDuration(duration: string): string {

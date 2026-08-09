@@ -170,7 +170,7 @@ This project showcases:
 
 1. Open the **tradersutopia inboundcall workflow** folder.
 2. Copy the Functions into your Twilio project (e.g. via Console or Twilio CLI).
-3. Set environment variables: `FROM_NUMBER`, `AGENT_LIST`, optionally `SYNC_SERVICE_SID`, `BASE_URL`, `MAX_WAIT_MS`, `SMS_FROM_NUMBER`, `CALLBACK_SCRIPT_URL`.
+3. Set environment variables: `FROM_NUMBER`, `AGENT_LIST`, optionally `SYNC_SERVICE_SID`, `BASE_URL`, `MAX_WAIT_MS`, `SMS_FROM_NUMBER`, `CALLBACK_SCRIPT_URL`, `RECORDING_STATUS_CALLBACK_URL`.
 4. In Studio: configure the flow to set `conferenceName` (e.g. `TU_{CallSid}`), POST to `/simulring_agents`, then TwiML Redirect to `/join_conference`.
 5. See **VOICE_FLOW.md** in that folder for the full behavioral contract.
 

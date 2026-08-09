@@ -18,10 +18,15 @@ export async function GET(req: NextRequest) {
     }
 
     const limitRaw = Number(req.nextUrl.searchParams.get("limit") || "50");
-    const recordings = await listCallRecordings(Number.isFinite(limitRaw) ? limitRaw : 50);
+    const daysRaw = Number(req.nextUrl.searchParams.get("days") || "7");
+    const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(daysRaw, 31)) : 7;
+    const recordings = await listCallRecordings(
+      Number.isFinite(limitRaw) ? limitRaw : 50,
+      days
+    );
 
     return NextResponse.json(
-      { ok: true, recordings },
+      { ok: true, recordings, windowDays: days },
       { headers: { "Cache-Control": "no-store, no-cache, must-revalidate" } }
     );
   } catch (err: unknown) {

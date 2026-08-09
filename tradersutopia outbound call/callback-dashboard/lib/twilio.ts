@@ -28,6 +28,11 @@ export interface CallRecording {
   callStatus: string;
   startTime: string;
   endTime: string;
+  customerPhone: string;
+  agentPhone: string;
+  answeredBy: string;
+  connectedDuration: number;
+  verification: "conference-bridge" | "human-detected" | "connected-duration";
 }
 
 type RecordingResource = {
@@ -42,10 +47,14 @@ type RecordingResource = {
 };
 
 type CallResource = {
+  sid?: string | null;
+  parentCallSid?: string | null;
   from?: string | null;
   to?: string | null;
   direction?: string | null;
   status?: string | null;
+  duration?: string | null;
+  answeredBy?: string | null;
   startTime?: Date | string | null;
   endTime?: Date | string | null;
 };
@@ -54,6 +63,10 @@ type ConferenceResource = {
   friendlyName?: string | null;
   status?: string | null;
 };
+
+const DEFAULT_RECORDING_WINDOW_DAYS = 7;
+const MIN_CONNECTED_RECORDING_SECONDS = 10;
+const LEGACY_CONNECTED_RECORDING_SECONDS = 60;
 
 function getClient() {
   const sid = process.env.TWILIO_SID;
@@ -180,6 +193,16 @@ export function buildBridgeTwiml(
 
     dial.number(
       {
+        url: leadScreenUrl(opts.publicBaseUrl, {
+          leadId: opts.leadId || "manual",
+          lead: leadPhone,
+        }),
+        method: "POST",
+        machineDetection: "Enable",
+        machineDetectionTimeout: 10,
+        machineDetectionSpeechThreshold: 2400,
+        machineDetectionSpeechEndThreshold: 2500,
+        machineDetectionSilenceTimeout: 5000,
         statusCallback: leadStatusUrl,
         statusCallbackEvent: OUTBOUND_STATUS_EVENTS,
         statusCallbackMethod: "POST",
@@ -191,6 +214,25 @@ export function buildBridgeTwiml(
     dial.number(leadPhone);
   }
 
+  return twiml.toString();
+}
+
+function leadScreenUrl(
+  publicBaseUrl: string,
+  params: Record<string, string>
+): string {
+  const url = new URL(`${publicBaseUrl.replace(/\/+$/, "")}/api/lead-screen`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value) url.searchParams.set(key, value);
+  }
+  return url.toString();
+}
+
+export function buildLeadScreenTwiml(answeredBy: string): string {
+  const twiml = new twilio.twiml.VoiceResponse();
+  if (answeredBy.trim().toLowerCase() !== "human") {
+    twiml.hangup();
+  }
   return twiml.toString();
 }
 
@@ -209,28 +251,30 @@ export function isE164(val: string): boolean {
   return /^\+[1-9]\d{6,14}$/.test(val);
 }
 
-export async function listCallRecordings(limit = 50): Promise<CallRecording[]> {
+export async function listCallRecordings(
+  limit = 50,
+  days = DEFAULT_RECORDING_WINDOW_DAYS
+): Promise<CallRecording[]> {
   const safeLimit = Math.max(1, Math.min(limit, 100));
+  const safeDays = Math.max(1, Math.min(days, 31));
+  const dateCreatedAfter = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000);
   const client = getClient();
-  const recordings = (await client.recordings.list({ limit: safeLimit })) as RecordingResource[];
+  const candidateLimit = Math.min(200, Math.max(50, safeLimit * 4));
+  const recordings = (
+    await client.recordings.list({ dateCreatedAfter, limit: candidateLimit })
+  ) as RecordingResource[];
+
+  const completedRecordings = recordings.filter(
+    (recording) =>
+      recording.status === "completed" &&
+      parseDuration(recording.duration) >= MIN_CONNECTED_RECORDING_SECONDS
+  );
 
   const callSids = Array.from(
-    new Set(recordings.map((recording) => recording.callSid).filter(Boolean) as string[])
+    new Set(completedRecordings.map((recording) => recording.callSid).filter(Boolean) as string[])
   );
   const conferenceSids = Array.from(
-    new Set(recordings.map((recording) => recording.conferenceSid).filter(Boolean) as string[])
-  );
-
-  const callMap = new Map<string, CallResource>();
-  await Promise.all(
-    callSids.map(async (callSid) => {
-      try {
-        const call = (await client.calls(callSid).fetch()) as CallResource;
-        callMap.set(callSid, call);
-      } catch (err) {
-        console.warn("[recordings] call lookup skipped", callSid, err instanceof Error ? err.message : err);
-      }
-    })
+    new Set(completedRecordings.map((recording) => recording.conferenceSid).filter(Boolean) as string[])
   );
 
   const conferenceMap = new Map<string, ConferenceResource>();
@@ -249,13 +293,75 @@ export async function listCallRecordings(limit = 50): Promise<CallRecording[]> {
     })
   );
 
-  return recordings.map((recording) => {
+  const conferenceCallSids = Array.from(
+    new Set(
+      [...conferenceMap.values()]
+        .map((conference) => extractCallerCallSid(conference.friendlyName || ""))
+        .filter(Boolean) as string[]
+    )
+  );
+
+  const callMap = new Map<string, CallResource>();
+  await Promise.all(
+    [...new Set([...callSids, ...conferenceCallSids])].map(async (callSid) => {
+      try {
+        const call = (await client.calls(callSid).fetch()) as CallResource;
+        callMap.set(callSid, call);
+      } catch (err) {
+        console.warn("[recordings] call lookup skipped", callSid, err instanceof Error ? err.message : err);
+      }
+    })
+  );
+
+  const childCallMap = new Map<string, CallResource[]>();
+  await Promise.all(
+    callSids.map(async (callSid) => {
+      try {
+        const childCalls = (await client.calls.list({ parentCallSid: callSid, limit: 20 })) as CallResource[];
+        childCallMap.set(callSid, childCalls);
+      } catch (err) {
+        console.warn(
+          "[recordings] child call lookup skipped",
+          callSid,
+          err instanceof Error ? err.message : err
+        );
+      }
+    })
+  );
+
+  return completedRecordings.flatMap((recording): CallRecording[] => {
     const callSid = recording.callSid || "";
     const conferenceSid = recording.conferenceSid || "";
-    const call = callSid ? callMap.get(callSid) : undefined;
     const conference = conferenceSid ? conferenceMap.get(conferenceSid) : undefined;
+    const conferenceCallSid = extractCallerCallSid(conference?.friendlyName || "");
+    const call = callMap.get(conferenceCallSid || callSid);
+    const childCall = selectConnectedChildCall(childCallMap.get(callSid) || []);
+    const connectedDuration = parseDuration(recording.duration);
+    const answeredBy = (childCall?.answeredBy || "").toLowerCase();
+    const isConferenceRecording = Boolean(conferenceSid) && conference?.status === "completed";
+    const isHumanDetected = answeredBy === "human";
+    const isLegacyConnected =
+      !answeredBy &&
+      recording.channels === 2 &&
+      connectedDuration >= LEGACY_CONNECTED_RECORDING_SECONDS;
+    const isConnectedDial =
+      !conferenceSid &&
+      call?.status === "completed" &&
+      childCall?.status === "completed" &&
+      parseDuration(childCall.duration) >= MIN_CONNECTED_RECORDING_SECONDS &&
+      (isHumanDetected || isLegacyConnected);
 
-    return {
+    if (!isConferenceRecording && !isConnectedDial) return [];
+
+    const customerPhone = isConferenceRecording ? call?.from || "" : childCall?.to || "";
+    const agentPhone = isConferenceRecording ? "" : call?.to || "";
+    const verification: CallRecording["verification"] = isConferenceRecording
+      ? "conference-bridge"
+      : isHumanDetected
+        ? "human-detected"
+        : "connected-duration";
+
+    return [{
       sid: recording.sid,
       callSid,
       conferenceSid,
@@ -265,14 +371,19 @@ export async function listCallRecordings(limit = 50): Promise<CallRecording[]> {
       duration: recording.duration || "",
       channels: recording.channels || 0,
       source: recording.source || (conferenceSid ? "Conference" : "Call"),
-      from: call?.from || "",
-      to: call?.to || "",
-      direction: call?.direction || "",
-      callStatus: call?.status || conference?.status || "",
-      startTime: toIso(call?.startTime),
-      endTime: toIso(call?.endTime),
-    };
-  });
+      from: customerPhone || call?.from || "",
+      to: agentPhone || call?.to || "",
+      direction: isConferenceRecording ? "inbound" : "outbound",
+      callStatus: childCall?.status || call?.status || conference?.status || "",
+      startTime: toIso(childCall?.startTime || call?.startTime),
+      endTime: toIso(childCall?.endTime || call?.endTime),
+      customerPhone,
+      agentPhone,
+      answeredBy,
+      connectedDuration,
+      verification,
+    }];
+  }).slice(0, safeLimit);
 }
 
 export async function fetchRecordingAudio(recordingSid: string, range?: string | null): Promise<{
@@ -319,4 +430,19 @@ function toIso(value: Date | string | null | undefined): string {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toISOString();
+}
+
+function extractCallerCallSid(conferenceName: string): string {
+  return conferenceName.match(/^TU_(CA[0-9a-fA-F]{32})(?:_|$)/)?.[1] || "";
+}
+
+function parseDuration(value: string | null | undefined): number {
+  const duration = Number(value || 0);
+  return Number.isFinite(duration) ? duration : 0;
+}
+
+function selectConnectedChildCall(calls: CallResource[]): CallResource | undefined {
+  return [...calls]
+    .filter((call) => call.direction === "outbound-dial")
+    .sort((a, b) => parseDuration(b.duration) - parseDuration(a.duration))[0];
 }
