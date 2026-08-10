@@ -23,6 +23,7 @@ interface RoutingAgent {
   label: string;
   enabled: boolean;
   updatedAt: string;
+  linePhones: string[];
 }
 
 interface RoutingLine {
@@ -110,6 +111,7 @@ export default function DashboardPage() {
   const [routingError, setRoutingError] = useState("");
   const [newAgentPhone, setNewAgentPhone] = useState("");
   const [newAgentLabel, setNewAgentLabel] = useState("");
+  const [newAgentLinePhone, setNewAgentLinePhone] = useState("");
   const [newLinePhone, setNewLinePhone] = useState("");
   const [newLineLabel, setNewLineLabel] = useState("");
 
@@ -486,7 +488,7 @@ export default function DashboardPage() {
 
   async function updateRouting(
     busyKey: string,
-    payload: Record<string, string | boolean>
+    payload: Record<string, string | boolean | string[]>
   ): Promise<boolean> {
     setRoutingBusy(busyKey);
     setRoutingError("");
@@ -539,11 +541,39 @@ export default function DashboardPage() {
       phone,
       label: newAgentLabel.trim() || "Agent",
       enabled: true,
+      linePhones: newAgentLinePhone ? [newAgentLinePhone] : [],
     });
     if (saved) {
       setNewAgentPhone("");
       setNewAgentLabel("");
+      setNewAgentLinePhone("");
     }
+  }
+
+  async function handleAgentLineChange(
+    agent: RoutingAgent,
+    linePhone: string,
+    assigned: boolean
+  ) {
+    const allLinePhones = routingLines.map((line) => line.phone);
+    const currentLines = agent.linePhones.length > 0
+      ? agent.linePhones
+      : allLinePhones;
+    const nextLines = assigned
+      ? [...new Set([...currentLines, linePhone])]
+      : currentLines.filter((phone) => phone !== linePhone);
+
+    if (nextLines.length === 0) {
+      setRoutingError("An enabled agent must be assigned to at least one line. Pause the agent instead.");
+      return;
+    }
+
+    await updateRouting(`agent:${agent.phone}:lines`, {
+      type: "agent",
+      phone: agent.phone,
+      label: agent.label,
+      linePhones: nextLines.length === allLinePhones.length ? [] : nextLines,
+    });
   }
 
   async function handleAddLine() {
@@ -1090,42 +1120,67 @@ export default function DashboardPage() {
               <h3 className="text-xs uppercase text-slate-400 mb-3">Inbound Agents</h3>
               <div className="divide-y divide-slate-800 border-y border-slate-800">
                 {routingAgents.map((agent) => (
-                  <div key={agent.phone} className="py-3 flex flex-wrap items-center gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-white truncate">
-                        {agent.label}
-                        {agent.phone === normalizedAffiliatePhone && (
-                          <span className="ml-2 text-[10px] uppercase text-blue-300">This phone</span>
-                        )}
-                      </p>
-                      <p className="text-xs text-slate-400 font-mono">{agent.phone}</p>
+                  <div key={agent.phone} className="py-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-white truncate">
+                          {agent.label}
+                          {agent.phone === normalizedAffiliatePhone && (
+                            <span className="ml-2 text-[10px] uppercase text-blue-300">This phone</span>
+                          )}
+                        </p>
+                        <p className="text-xs text-slate-400 font-mono">{agent.phone}</p>
+                      </div>
+                      <RoutingToggle
+                        enabled={agent.enabled}
+                        busy={routingBusy.startsWith(`agent:${agent.phone}`)}
+                        label={agent.label}
+                        onChange={() => void updateRouting(`agent:${agent.phone}`, {
+                          type: "agent",
+                          phone: agent.phone,
+                          enabled: !agent.enabled,
+                        })}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void updateRouting(`agent:${agent.phone}`, {
+                          action: "remove",
+                          type: "agent",
+                          phone: agent.phone,
+                        })}
+                        disabled={routingBusy.startsWith(`agent:${agent.phone}`)}
+                        className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
                     </div>
-                    <RoutingToggle
-                      enabled={agent.enabled}
-                      busy={routingBusy === `agent:${agent.phone}`}
-                      label={agent.label}
-                      onChange={() => void updateRouting(`agent:${agent.phone}`, {
-                        type: "agent",
-                        phone: agent.phone,
-                        enabled: !agent.enabled,
+                    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                      <span className="text-[10px] uppercase text-slate-500">Receives</span>
+                      {routingLines.map((line) => {
+                        const assigned =
+                          agent.linePhones.length === 0 || agent.linePhones.includes(line.phone);
+                        return (
+                          <label key={line.phone} className="flex items-center gap-1.5 text-xs text-slate-300">
+                            <input
+                              type="checkbox"
+                              checked={assigned}
+                              onChange={(event) => void handleAgentLineChange(
+                                agent,
+                                line.phone,
+                                event.target.checked
+                              )}
+                              disabled={routingBusy.startsWith(`agent:${agent.phone}`)}
+                              className="h-4 w-4 accent-blue-500"
+                            />
+                            {line.label}
+                          </label>
+                        );
                       })}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void updateRouting(`agent:${agent.phone}`, {
-                        action: "remove",
-                        type: "agent",
-                        phone: agent.phone,
-                      })}
-                      disabled={routingBusy === `agent:${agent.phone}`}
-                      className="text-xs text-red-300 hover:text-red-200 disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
+                    </div>
                   </div>
                 ))}
               </div>
-              <div className="mt-3 grid sm:grid-cols-[1fr_1fr_auto] gap-2">
+              <div className="mt-3 grid sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_auto] gap-2">
                 <input
                   type="text"
                   value={newAgentLabel}
@@ -1140,6 +1195,19 @@ export default function DashboardPage() {
                   placeholder="+14375551234"
                   className="min-w-0 px-3 py-2 text-sm font-mono bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
                 />
+                <select
+                  value={newAgentLinePhone}
+                  onChange={(event) => setNewAgentLinePhone(event.target.value)}
+                  aria-label="Inbound line assignment"
+                  className="min-w-0 px-3 py-2 text-sm bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">All inbound lines</option>
+                  {routingLines.map((line) => (
+                    <option key={line.phone} value={line.phone}>
+                      {line.label} only
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={() => void handleAddAgent()}
@@ -1159,7 +1227,7 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center gap-2 mb-2">
           <p className="text-slate-400 text-xs uppercase tracking-wider">Dial any number</p>
           <label className="ml-auto flex items-center gap-2 text-xs text-slate-400">
-            From
+            Caller ID
             <select
               value={manualFromNumber}
               onChange={(event) => setManualFromNumber(event.target.value)}

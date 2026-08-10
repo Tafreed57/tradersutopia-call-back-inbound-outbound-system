@@ -117,7 +117,7 @@ Restart the dev server after changing `.env.local`.
 1. Open your Vercel URL → `/dashboard`
 2. Log in with access code
 3. Enter your phone number
-4. Open **Routing** to enable or pause agents, select the default line, or add another owned Twilio number.
+4. Open **Routing** to enable or pause agents, assign each agent to Cancellation, Sales, or both, select the default line, or add another owned Twilio number.
 4. You should see your leads from Google Sheets
 5. Click "Mark Called" on a lead → status updates instantly on dashboard AND in Google Sheets
 6. Click "Call" on a lead → your phone rings → answer → you hear "Connecting you to your callback" → lead's phone rings

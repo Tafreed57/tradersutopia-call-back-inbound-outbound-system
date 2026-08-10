@@ -56,6 +56,9 @@ export async function POST(req: NextRequest) {
         phone,
         label: typeof body.label === "string" ? body.label : undefined,
         enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+        linePhones: Array.isArray(body.linePhones)
+          ? body.linePhones.map((line: unknown) => String(line))
+          : undefined,
       });
       return NextResponse.json({ ok: true, ...config });
     }

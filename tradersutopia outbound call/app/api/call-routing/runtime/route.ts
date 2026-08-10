@@ -31,8 +31,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       {
         ok: true,
-        agents: lineEnabled
-          ? config.agents.filter((agent) => agent.enabled).map((agent) => agent.phone)
+        agents: lineEnabled && selectedLine
+          ? config.agents
+              .filter(
+                (agent) =>
+                  agent.enabled &&
+                  (agent.linePhones.length === 0 || agent.linePhones.includes(selectedLine.phone))
+              )
+              .map((agent) => agent.phone)
           : [],
         fromNumber: selectedLine?.phone || "",
         line: selectedLine
