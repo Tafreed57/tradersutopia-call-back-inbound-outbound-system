@@ -1,11 +1,11 @@
 /**
  * GET /api/leads
  * Query params: status, q, sort, order
- * Server-only — reads from Google Sheets
+ * Server-only - reads from PostgreSQL.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getLeads, ensureSheetsReady } from "@/lib/sheets";
+import { getLeads, ensureDataReady } from "@/lib/data-store";
 import { withRetry } from "@/lib/retry";
 import { validateAccessCode } from "@/lib/access";
 
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    await ensureSheetsReady();
+    await ensureDataReady();
 
     const leads = await withRetry(() => getLeads({ status, q, sort, order }));
     return NextResponse.json(

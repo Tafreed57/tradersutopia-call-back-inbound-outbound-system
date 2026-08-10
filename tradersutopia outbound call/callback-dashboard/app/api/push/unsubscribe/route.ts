@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { removePushSubscription } from "@/lib/sheets";
+import { removePushSubscription } from "@/lib/data-store";
 
 export const runtime = "nodejs";
 

@@ -3,7 +3,7 @@ import { validateAccessCode } from "@/lib/access";
 import {
   removeRecordingFavorite,
   saveRecordingFavorite,
-} from "@/lib/sheets";
+} from "@/lib/data-store";
 import type { CallRecording } from "@/lib/twilio";
 import { withRetry } from "@/lib/retry";
 

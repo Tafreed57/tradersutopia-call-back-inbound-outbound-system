@@ -5,7 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { updateLead, appendLog, ensureSheetsReady } from "@/lib/sheets";
+import { updateLead, appendLog, ensureDataReady } from "@/lib/data-store";
 import { withRetry } from "@/lib/retry";
 import { validateAccessCode } from "@/lib/access";
 import { v4 as uuidv4 } from "uuid";
@@ -30,7 +30,7 @@ export async function PATCH(
       );
     }
 
-    await ensureSheetsReady();
+    await ensureDataReady();
 
     if (!status && notes === undefined) {
       return NextResponse.json(

@@ -349,7 +349,7 @@ export default function DashboardPage() {
     return () => window.clearTimeout(timer);
   }, [isAuth, phoneSet, fetchLeads]);
 
-  // Auto-refresh every 30s (Google Sheets API has a 60 reads/min quota)
+  // Keep callback status current for agents without requiring manual refresh.
   useEffect(() => {
     if (!isAuth || !phoneSet) return;
     const interval = setInterval(fetchLeads, 30000);

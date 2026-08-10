@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "migrate:sheets": "node scripts/migrate-sheets-to-postgres.mjs",
+    "twilio:cutover": "node scripts/cutover-twilio-data-webhook.mjs"
   },
   "dependencies": {
     "googleapis": "^171.4.0",

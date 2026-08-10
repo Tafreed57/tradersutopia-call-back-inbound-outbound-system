@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { appendLog, ensureSheetsReady } from "@/lib/sheets";
+import { appendLog, ensureDataReady } from "@/lib/data-store";
 import { v4 as uuidv4 } from "uuid";
 
 export const runtime = "nodejs";
@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
   console.log("[recording-status]", JSON.stringify(details));
 
   try {
-    await ensureSheetsReady();
+    await ensureDataReady();
     await appendLog({
       logId: uuidv4(),
       action: `RECORDING_${recordingStatus.toUpperCase()}`,

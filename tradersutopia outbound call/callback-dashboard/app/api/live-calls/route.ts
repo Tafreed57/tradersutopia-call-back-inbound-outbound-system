@@ -1,23 +1,23 @@
 /**
  * GET /api/live-calls
  * Query params: status (LIVE | ENDED | all, default: LIVE)
- * Returns current live/ended call entries from the "Live Calls" sheet.
+ * Returns current live/ended call entries from PostgreSQL.
  *
  * Detects NEW live calls and sends push notifications. Uses "Push Notified"
- * sheet to track which agent+conference we already notified (works across
+ * persistent state to track which agent+conference we already notified (works across
  * serverless invocations). We AWAIT the push so it completes before response.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import {
   getLiveCalls,
-  ensureSheetsReady,
+  ensureDataReady,
   getAllPushSubscriptions,
   removePushSubscription,
   getAlreadyNotifiedRecent,
   recordPushNotified,
   type LiveCall,
-} from "@/lib/sheets";
+} from "@/lib/data-store";
 import { withRetry } from "@/lib/retry";
 import { validateAccessCode } from "@/lib/access";
 import webpush from "web-push";
@@ -50,7 +50,7 @@ async function sendPushForNewCalls(liveCalls: LiveCall[]): Promise<void> {
   try {
     alreadyNotified = await getAlreadyNotifiedRecent();
   } catch (err) {
-    console.error("[push] Failed to read notified sheet:", err);
+    console.error("[push] Failed to read notified calls:", err);
     alreadyNotified = new Set();
   }
 
@@ -157,7 +157,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    await ensureSheetsReady();
+    await ensureDataReady();
 
     const calls = await withRetry(() => getLiveCalls({ status }));
 

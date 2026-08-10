@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateAccessCode } from "@/lib/access";
-import { getRecordingFavorites } from "@/lib/sheets";
+import { getRecordingFavorites } from "@/lib/data-store";
 import { listCallRecordings } from "@/lib/twilio";
 
 export const runtime = "nodejs";

@@ -1,19 +1,7 @@
-import { google, sheets_v4 } from "googleapis";
 import { revalidateTag, unstable_cache } from "next/cache";
 import twilio from "twilio";
+import { databaseRequest } from "./database";
 
-type SheetCell = string | number | boolean | null | undefined;
-
-const ROUTING_HEADERS = [
-  "type",
-  "phone",
-  "label",
-  "enabled",
-  "isDefault",
-  "twilioSid",
-  "updatedAt",
-  "linePhones",
-];
 const ROUTING_CACHE_TAG = "call-routing-config";
 
 export interface RoutingAgent {
@@ -38,43 +26,6 @@ export interface CallRoutingConfig {
   lines: RoutingLine[];
 }
 
-function routingTab(): string {
-  return process.env.GOOGLE_SHEET_CALL_ROUTING_TAB || "Call Routing";
-}
-
-function sheetRange(range: string): string {
-  return `'${routingTab().replace(/'/g, "''")}'!${range}`;
-}
-
-function getSheets(): sheets_v4.Sheets {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON env var");
-
-  const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(raw),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-  return google.sheets({ version: "v4", auth });
-}
-
-function spreadsheetId(): string {
-  const id = process.env.GOOGLE_SHEET_ID;
-  if (!id) throw new Error("Missing GOOGLE_SHEET_ID env var");
-  return id;
-}
-
-function cell(value: SheetCell): string {
-  if (value === null || value === undefined) return "";
-  return String(value);
-}
-
-function booleanCell(value: SheetCell, defaultValue = false): boolean {
-  if (typeof value === "boolean") return value;
-  const normalized = cell(value).trim().toLowerCase();
-  if (!normalized) return defaultValue;
-  return normalized === "true" || normalized === "yes" || normalized === "1";
-}
-
 function normalizePhone(value: string): string {
   const trimmed = value.trim();
   if (trimmed.startsWith("+")) return `+${trimmed.slice(1).replace(/\D/g, "")}`;
@@ -93,14 +44,13 @@ function envList(name: string): string[] {
     .filter(isRoutingPhone);
 }
 
-function seedRows(): Array<Array<string | boolean>> {
+function seedConfig(): CallRoutingConfig {
   const now = new Date().toISOString();
   const lines = envList("TWILIO_NUMBERS");
   const defaultNumber = normalizePhone(process.env.TWILIO_NUMBER || "");
   if (isRoutingPhone(defaultNumber) && !lines.includes(defaultNumber)) {
     lines.unshift(defaultNumber);
   }
-
   const labels = (process.env.TWILIO_NUMBER_LABELS || "Cancellation,Sales")
     .split(",")
     .map((label) => label.trim());
@@ -108,165 +58,37 @@ function seedRows(): Array<Array<string | boolean>> {
     ? envList("CALL_ROUTING_DEFAULT_AGENTS")
     : envList("AGENT_LIST");
 
-  return [
-    ...lines.map((phone, index) => [
-      "line",
+  return {
+    lines: lines.map((phone, index) => ({
       phone,
-      labels[index] || `Line ${index + 1}`,
-      true,
-      index === 0,
-      "",
-      now,
-      "",
-    ]),
-    ...agents.map((phone, index) => [
-      "agent",
+      label: labels[index] || `Line ${index + 1}`,
+      enabled: true,
+      isDefault: index === 0,
+      twilioSid: "",
+      updatedAt: now,
+    })),
+    agents: agents.map((phone, index) => ({
       phone,
-      `Agent ${index + 1}`,
-      true,
-      false,
-      "",
-      now,
-      "",
-    ]),
-  ];
-}
-
-let routingSetup: Promise<void> | null = null;
-
-async function createRoutingSheetIfMissing(): Promise<void> {
-  if (routingSetup) return routingSetup;
-
-  routingSetup = (async () => {
-    const sheets = getSheets();
-    const id = spreadsheetId();
-    const meta = await sheets.spreadsheets.get({ spreadsheetId: id });
-    const exists = (meta.data.sheets || []).some(
-      (sheet) => sheet.properties?.title === routingTab()
-    );
-
-    if (!exists) {
-      try {
-        await sheets.spreadsheets.batchUpdate({
-          spreadsheetId: id,
-          requestBody: {
-            requests: [{ addSheet: { properties: { title: routingTab() } } }],
-          },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.toLowerCase().includes("already exists")) throw error;
-      }
-    }
-  })().catch((error) => {
-    routingSetup = null;
-    throw error;
-  });
-
-  return routingSetup;
-}
-
-type RoutingRow = {
-  type: "agent" | "line";
-  phone: string;
-  label: string;
-  enabled: boolean;
-  isDefault: boolean;
-  twilioSid: string;
-  updatedAt: string;
-  linePhones: string[];
-  rowNumber: number;
-};
-
-async function getRoutingRows(): Promise<RoutingRow[]> {
-  const sheets = getSheets();
-  const id = spreadsheetId();
-  let values: SheetCell[][];
-
-  try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: id,
-      range: sheetRange("A1:H"),
-    });
-    values = (response.data.values || []) as SheetCell[][];
-  } catch (error) {
-    const message = error instanceof Error ? error.message.toLowerCase() : String(error);
-    if (!message.includes("unable to parse range") && !message.includes("not found")) throw error;
-    await createRoutingSheetIfMissing();
-    values = [];
-  }
-
-  const headerMatches = ROUTING_HEADERS.every(
-    (header, index) => cell(values[0]?.[index]).trim() === header
-  );
-  if (!headerMatches) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: id,
-      range: sheetRange("A1:H1"),
-      valueInputOption: "RAW",
-      requestBody: { values: [ROUTING_HEADERS] },
-    });
-  }
-
-  let dataRows = values.slice(1);
-  if (dataRows.length === 0) {
-    const rows = seedRows();
-    if (rows.length > 0) {
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: id,
-        range: sheetRange("A:H"),
-        valueInputOption: "RAW",
-        requestBody: { values: rows },
-      });
-      dataRows = rows;
-    }
-  }
-
-  return dataRows.flatMap((row, index) => {
-    const type = cell(row[0]).trim().toLowerCase();
-    const phone = normalizePhone(cell(row[1]));
-    if ((type !== "agent" && type !== "line") || !isRoutingPhone(phone)) return [];
-    return [{
-      type,
-      phone,
-      label: cell(row[2]).trim() || (type === "line" ? phone : "Agent"),
-      enabled: booleanCell(row[3], true),
-      isDefault: type === "line" && booleanCell(row[4]),
-      twilioSid: cell(row[5]).trim(),
-      updatedAt: cell(row[6]).trim(),
-      linePhones: cell(row[7])
-        .split(",")
-        .map(normalizePhone)
-        .filter(isRoutingPhone),
-      rowNumber: index + 2,
-    } as RoutingRow];
-  });
+      label: `Agent ${index + 1}`,
+      enabled: true,
+      updatedAt: now,
+      linePhones: [],
+    })),
+  };
 }
 
 async function loadCallRoutingConfig(): Promise<CallRoutingConfig> {
-  const rows = await getRoutingRows();
-  return {
-    agents: rows
-      .filter((row) => row.type === "agent")
-      .map(({ phone, label, enabled, updatedAt, linePhones }) => ({
-        phone,
-        label,
-        enabled,
-        updatedAt,
-        linePhones,
-      })),
-    lines: rows
-      .filter((row) => row.type === "line")
-      .map(({ phone, label, enabled, isDefault, twilioSid, updatedAt }) => ({
-        phone,
-        label,
-        enabled,
-        isDefault,
-        twilioSid,
-        updatedAt,
-      }))
-      .sort((a, b) => Number(b.isDefault) - Number(a.isDefault)),
-  };
+  let config = await databaseRequest<CallRoutingConfig>("routing.get");
+  if (config.lines.length > 0 || config.agents.length > 0) return config;
+
+  const seed = seedConfig();
+  for (const line of seed.lines) {
+    config = await databaseRequest<CallRoutingConfig>("routing.upsert_line", line);
+  }
+  for (const agent of seed.agents) {
+    config = await databaseRequest<CallRoutingConfig>("routing.upsert_agent", agent);
+  }
+  return config;
 }
 
 const getCachedCallRoutingConfig = unstable_cache(
@@ -285,26 +107,6 @@ function invalidateCallRoutingConfig(): void {
   revalidateTag(ROUTING_CACHE_TAG, { expire: 0 });
 }
 
-async function writeRoutingRow(rowNumber: number | null, values: Array<string | boolean>): Promise<void> {
-  const sheets = getSheets();
-  if (rowNumber) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: spreadsheetId(),
-      range: sheetRange(`A${rowNumber}:H${rowNumber}`),
-      valueInputOption: "RAW",
-      requestBody: { values: [values] },
-    });
-    return;
-  }
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: spreadsheetId(),
-    range: sheetRange("A:H"),
-    valueInputOption: "RAW",
-    requestBody: { values: [values] },
-  });
-}
-
 export async function upsertRoutingAgent(input: {
   phone: string;
   label?: string;
@@ -314,29 +116,20 @@ export async function upsertRoutingAgent(input: {
   const phone = normalizePhone(input.phone);
   if (!isRoutingPhone(phone)) throw new Error("Agent phone must use E.164 format");
 
-  const rows = await getRoutingRows();
-  const existing = rows.find((row) => row.type === "agent" && row.phone === phone);
-  const configuredLines = new Set(
-    rows.filter((row) => row.type === "line").map((row) => row.phone)
-  );
-  const requestedLines = input.linePhones === undefined
-    ? existing?.linePhones || []
-    : [...new Set(input.linePhones.map(normalizePhone))];
-  if (requestedLines.some((linePhone) => !configuredLines.has(linePhone))) {
+  const config = await getCallRoutingConfig({ fresh: true });
+  const configuredLines = new Set(config.lines.map((line) => line.phone));
+  const linePhones = input.linePhones?.map(normalizePhone);
+  if (linePhones?.some((linePhone) => !configuredLines.has(linePhone))) {
     throw new Error("Agent assignments must use configured Twilio lines");
   }
-  await writeRoutingRow(existing?.rowNumber || null, [
-    "agent",
+
+  const result = await databaseRequest<CallRoutingConfig>("routing.upsert_agent", {
+    ...input,
     phone,
-    input.label?.trim() || existing?.label || "Agent",
-    input.enabled ?? existing?.enabled ?? true,
-    false,
-    "",
-    new Date().toISOString(),
-    requestedLines.join(","),
-  ]);
+    ...(linePhones ? { linePhones: [...new Set(linePhones)] } : {}),
+  });
   invalidateCallRoutingConfig();
-  return loadCallRoutingConfig();
+  return result;
 }
 
 export async function upsertRoutingLine(input: {
@@ -349,68 +142,23 @@ export async function upsertRoutingLine(input: {
   const phone = normalizePhone(input.phone);
   if (!isRoutingPhone(phone)) throw new Error("Twilio line must use E.164 format");
 
-  const rows = await getRoutingRows();
-  const existing = rows.find((row) => row.type === "line" && row.phone === phone);
-  const lineRows = rows.filter((row) => row.type === "line");
-  const isDefault = input.isDefault ?? existing?.isDefault ?? lineRows.length === 0;
-
-  if (isDefault) {
-    const sheets = getSheets();
-    const updates = lineRows
-      .filter((row) => row.phone !== phone && row.isDefault)
-      .map((row) => ({ range: sheetRange(`E${row.rowNumber}`), values: [[false]] }));
-    if (updates.length > 0) {
-      await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: spreadsheetId(),
-        requestBody: { valueInputOption: "RAW", data: updates },
-      });
-    }
-  }
-
-  await writeRoutingRow(existing?.rowNumber || null, [
-    "line",
+  const config = await getCallRoutingConfig({ fresh: true });
+  const existing = config.lines.find((line) => line.phone === phone);
+  const result = await databaseRequest<CallRoutingConfig>("routing.upsert_line", {
+    ...input,
     phone,
-    input.label?.trim() || existing?.label || phone,
-    input.enabled ?? existing?.enabled ?? true,
-    isDefault,
-    input.twilioSid || existing?.twilioSid || "",
-    new Date().toISOString(),
-    "",
-  ]);
+    isDefault: input.isDefault ?? existing?.isDefault ?? config.lines.length === 0,
+  });
   invalidateCallRoutingConfig();
-  return loadCallRoutingConfig();
+  return result;
 }
 
 export async function removeRoutingAgent(phoneValue: string): Promise<CallRoutingConfig> {
-  const phone = normalizePhone(phoneValue);
-  const rows = await getRoutingRows();
-  const row = rows.find((item) => item.type === "agent" && item.phone === phone);
-  if (!row) return getCallRoutingConfig();
-
-  const sheets = getSheets();
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: spreadsheetId() });
-  const sheetId = (meta.data.sheets || []).find(
-    (sheet) => sheet.properties?.title === routingTab()
-  )?.properties?.sheetId;
-  if (sheetId === undefined) throw new Error("Call Routing sheet was not found");
-
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: spreadsheetId(),
-    requestBody: {
-      requests: [{
-        deleteDimension: {
-          range: {
-            sheetId,
-            dimension: "ROWS",
-            startIndex: row.rowNumber - 1,
-            endIndex: row.rowNumber,
-          },
-        },
-      }],
-    },
+  const result = await databaseRequest<CallRoutingConfig>("routing.remove_agent", {
+    phone: normalizePhone(phoneValue),
   });
   invalidateCallRoutingConfig();
-  return loadCallRoutingConfig();
+  return result;
 }
 
 export async function resolveOutboundLine(preferredPhone?: string): Promise<RoutingLine> {

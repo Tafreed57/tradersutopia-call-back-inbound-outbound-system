@@ -1,5 +1,7 @@
 # Step-by-Step: Google Cloud Service Account + Env Setup
 
+> Legacy migration guide only. PostgreSQL is now the production database. Google credentials are needed only to run `npm run migrate:sheets` against an old sheet.
+
 You already have a Google Sheet. Follow these steps in order.
 
 ---

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { savePushSubscription } from "@/lib/sheets";
+import { savePushSubscription } from "@/lib/data-store";
 
 export const runtime = "nodejs";
 

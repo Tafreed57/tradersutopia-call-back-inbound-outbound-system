@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAllPushSubscriptions, removePushSubscription } from "@/lib/sheets";
+import { getAllPushSubscriptions, removePushSubscription } from "@/lib/data-store";
 import webpush from "web-push";
 
 export const runtime = "nodejs";

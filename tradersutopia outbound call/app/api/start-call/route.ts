@@ -1,11 +1,11 @@
 /**
  * POST /api/start-call
  * Body: { leadId, affiliatePhone, accessCode }
- * Initiates a Twilio bridge call, updates Sheets, logs to CallLogs.
+ * Initiates a Twilio bridge call and writes an audit log to PostgreSQL.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getLeadById, appendLog, ensureSheetsReady } from "@/lib/sheets";
+import { getLeadById, appendLog, ensureDataReady } from "@/lib/data-store";
 import { startBridgeCall, isE164 } from "@/lib/twilio";
 import { isEmergencyNumber } from "@/lib/emergency";
 import { validateAccessCode } from "@/lib/access";
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await ensureSheetsReady();
+    await ensureDataReady();
 
     // ── Validate ──
     if (!leadId || !affiliatePhone) {

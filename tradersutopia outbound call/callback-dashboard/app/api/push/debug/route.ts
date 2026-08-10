@@ -3,7 +3,7 @@ import {
   getLiveCalls,
   getAllPushSubscriptions,
   getAlreadyNotifiedRecent,
-} from "@/lib/sheets";
+} from "@/lib/data-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
