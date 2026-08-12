@@ -9,14 +9,15 @@ export async function POST(req: NextRequest) {
   const answeredBy = String(form?.get("AnsweredBy") || "unknown").toLowerCase();
   const callSid = String(form?.get("CallSid") || "");
   const parentCallSid = String(form?.get("ParentCallSid") || "");
-  const allowed = answeredBy === "human";
 
   console.log(
     "[lead-screen]",
-    JSON.stringify({ answeredBy, allowed, callSid, parentCallSid })
+    JSON.stringify({ answeredBy, allowed: true, callSid, parentCallSid })
   );
 
-  return new NextResponse(buildLeadScreenTwiml(answeredBy), {
+  // Older calls may still reach this endpoint during a deployment. An empty
+  // response lets Twilio connect the parties instead of rejecting the answer.
+  return new NextResponse(buildLeadScreenTwiml(), {
     status: 200,
     headers: {
       "Content-Type": "text/xml; charset=utf-8",

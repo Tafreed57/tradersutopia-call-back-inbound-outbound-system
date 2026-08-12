@@ -199,16 +199,6 @@ export function buildBridgeTwiml(
 
     dial.number(
       {
-        url: leadScreenUrl(opts.publicBaseUrl, {
-          leadId: opts.leadId || "manual",
-          lead: leadPhone,
-        }),
-        method: "POST",
-        machineDetection: "Enable",
-        machineDetectionTimeout: 10,
-        machineDetectionSpeechThreshold: 2400,
-        machineDetectionSpeechEndThreshold: 2500,
-        machineDetectionSilenceTimeout: 5000,
         statusCallback: leadStatusUrl,
         statusCallbackEvent: OUTBOUND_STATUS_EVENTS,
         statusCallbackMethod: "POST",
@@ -223,22 +213,8 @@ export function buildBridgeTwiml(
   return twiml.toString();
 }
 
-function leadScreenUrl(
-  publicBaseUrl: string,
-  params: Record<string, string>
-): string {
-  const url = new URL(`${publicBaseUrl.replace(/\/+$/, "")}/api/lead-screen`);
-  for (const [key, value] of Object.entries(params)) {
-    if (value) url.searchParams.set(key, value);
-  }
-  return url.toString();
-}
-
-export function buildLeadScreenTwiml(answeredBy: string): string {
+export function buildLeadScreenTwiml(): string {
   const twiml = new twilio.twiml.VoiceResponse();
-  if (answeredBy.trim().toLowerCase() !== "human") {
-    twiml.hangup();
-  }
   return twiml.toString();
 }
 
