@@ -58,6 +58,39 @@ exports.handler = async function (context, event, callback) {
 
   console.log(JSON.stringify(payload));
 
+  // Persist actual joins and caller departures; never infer an answer from a timeout.
+  var original = /^TU_(CA[0-9a-fA-F]{32})(?:_|$)/.exec(friendlyName);
+  var agentJoined = original && eventType === 'participant-join' && participantCallSid &&
+    participantCallSid !== original[1];
+  var callerLeft = original && eventType === 'participant-leave' && participantCallSid === original[1];
+  var deliveryError = null;
+  if (original && (agentJoined || callerLeft || eventType === 'conference-end')) {
+    var endpoint = (context.CALLBACK_SCRIPT_URL || '').trim();
+    var body = JSON.stringify({
+      event: agentJoined ? 'inbound_agent_joined' : 'inbound_ended',
+      call_sid: original[1],
+      conference_name: friendlyName,
+      timestamp: new Date().toISOString()
+    });
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (!endpoint) throw new Error('CALLBACK_SCRIPT_URL is missing');
+        var response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json',
+            'x-call-routing-secret': (context.CALL_ROUTING_SECRET || '').trim() },
+          body: body,
+          signal: AbortSignal.timeout(3500)
+        });
+        await response.text();
+        if (!response.ok) throw new Error('Inbound event rejected: ' + response.status);
+        deliveryError = null;
+        break;
+      } catch (error) { deliveryError = error; }
+    }
+    if (deliveryError) console.error('INBOUND_EVENT_FAILED', original[1], deliveryError.message);
+  }
+
   // Release all agents for this conference when it ends
   var syncSid = (context.SYNC_SERVICE_SID || '').trim();
   if (syncSid && eventType === 'conference-end' && friendlyName) {
@@ -67,6 +100,12 @@ exports.handler = async function (context, event, callback) {
         .syncMaps('call_routing')
         .syncMapItems(friendlyName)
         .fetch();
+      try {
+        await client.sync.v1.services(syncSid).syncMaps('call_routing')
+          .syncMapItems('winner_' + friendlyName).remove();
+      } catch (winnerCleanup) {
+        if (winnerCleanup.status !== 404) console.warn('WINNER_CLEANUP_FAILED', winnerCleanup.message);
+      }
       var agentsToRelease = confItem.data.agents || [];
       for (var r = 0; r < agentsToRelease.length; r++) {
         try {
@@ -128,5 +167,5 @@ exports.handler = async function (context, event, callback) {
     } catch (e) {}
   }
 
-  return callback(null, '');
+  return callback(deliveryError, '');
 };

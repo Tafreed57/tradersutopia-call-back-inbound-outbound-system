@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { databaseRequest } from "@/lib/database";
-import { upsertMissedCall } from "@/lib/data-store";
+import { observeInboundCall } from "@/lib/inbound-calls";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,19 +27,12 @@ export async function POST(req: NextRequest) {
     const body = (await req.json()) as Record<string, unknown>;
     const event = value(body, "event");
 
-    if (event === "callback_requested") {
-      if (value(body, "digits") !== "missed_no_agent") {
-        return NextResponse.json({ ok: true, ignored: "not_a_missed_call" });
-      }
-      const lead = await upsertMissedCall({
-        phone: value(body, "caller"),
-        calledNumber: value(body, "called_number"),
-        callSid: value(body, "call_sid"),
-        createdAt: value(body, "timestamp"),
-        digits: value(body, "digits"),
-        reason: "missed_inbound",
-      });
-      return NextResponse.json({ ok: true, leadId: lead.id });
+    if (event === "callback_requested" || event === "inbound_agent_joined" || event === "inbound_ended") {
+      const result = await observeInboundCall(
+        value(body, "call_sid"),
+        event === "inbound_agent_joined" ? value(body, "timestamp") || new Date().toISOString() : undefined
+      );
+      return NextResponse.json({ ok: true, ...result });
     }
 
     if (event === "agent_on_call") {

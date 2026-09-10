@@ -24,7 +24,7 @@
  */
 exports.handler = async function (context, event, callback) {
   // ── RAW EVENT DUMP (diagnostic — check Twilio Live Logs) ───────────
-  console.log("ACCEPT_RAW_EVENT=" + JSON.stringify(event));
+
 
   // ── Correlation & logging ──────────────────────────────────────────
   var requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -122,9 +122,14 @@ exports.handler = async function (context, event, callback) {
   var syncSid = (context.SYNC_SERVICE_SID || '').trim();
   var SYNC_MAP = 'call_routing';
 
-  if ((!callerNumber || !calledNumber) && callerCallSid) {
+  if (callerCallSid) {
     try {
       var callerCall = await client.calls(callerCallSid).fetch();
+      if (['completed', 'busy', 'failed', 'no-answer', 'canceled'].indexOf(callerCall.status) !== -1) {
+        twiml.say('The caller has disconnected.');
+        twiml.hangup();
+        return callback(null, twiml);
+      }
       if (!callerNumber) callerNumber = (callerCall.from || '').trim();
       if (!calledNumber) calledNumber = (callerCall.to || '').trim();
       correlation.callerNumber = callerNumber;
@@ -135,7 +140,35 @@ exports.handler = async function (context, event, callback) {
     }
   }
 
-  // Try Sync first; if Sync fails, fall back to REST API (never skip cancellation)
+  // Only one acceptance can win, including agents answering at the same time.
+  if (syncSid) {
+    try {
+      await client.sync.v1.services(syncSid).syncMaps(SYNC_MAP).syncMapItems.create({
+        key: 'winner_' + conferenceName, data: { callSid: agentCallSid }, ttl: 14400
+      });
+    } catch (winnerError) {
+      if (winnerError.status === 409) {
+        var winner = await client.sync.v1.services(syncSid).syncMaps(SYNC_MAP)
+          .syncMapItems('winner_' + conferenceName).fetch();
+        if (winner.data.callSid !== agentCallSid) {
+          twiml.say('Another agent has taken this call.');
+          twiml.hangup();
+          return callback(null, twiml);
+        }
+      } else {
+        log('error', 'WINNER_CLAIM_FAILED', { message: winnerError.message });
+      }
+    }
+    try {
+      var agentLease = await client.sync.v1.services(syncSid).syncMaps(SYNC_MAP).syncMapItems(agentNumber).fetch();
+      if (agentLease.data.conferenceName === conferenceName) {
+        await client.sync.v1.services(syncSid).syncMaps(SYNC_MAP).syncMapItems(agentNumber)
+          .update({ data: Object.assign({}, agentLease.data, { callSid: agentCallSid }), ttl: 14400 });
+      }
+    } catch (leaseError) { log('warn', 'LEASE_EXTENSION_FAILED', { message: leaseError.message }); }
+  }
+
+  // Cancel only SIDs belonging to this conference.
   var cancelledViaSyncOk = false;
   try {
     if (syncSid) {
@@ -143,6 +176,8 @@ exports.handler = async function (context, event, callback) {
         .syncMaps(SYNC_MAP)
         .syncMapItems(conferenceName)
         .fetch();
+      await client.sync.v1.services(syncSid).syncMaps(SYNC_MAP).syncMapItems(conferenceName)
+        .update({ data: confItem.data, ttl: 14400 });
       var siblingCallSids = (confItem.data.callSids || []).filter(function (sid) {
         return sid !== agentCallSid;
       });
@@ -161,30 +196,7 @@ exports.handler = async function (context, event, callback) {
     log('warn', 'SYNC_CANCEL_FAILED', { message: syncCancelErr.message, status: syncCancelErr.status });
   }
 
-  // Fallback: REST API with call.url filtering (if Sync wasn't used or failed)
-  if (!cancelledViaSyncOk) {
-    try {
-      var FROM_NUMBER = calledNumber || (context.FROM_NUMBER || '').trim();
-      if (FROM_NUMBER) {
-        var ringingCalls = await client.calls.list({ from: FROM_NUMBER, status: 'ringing', limit: 20 });
-        var queuedCalls = await client.calls.list({ from: FROM_NUMBER, status: 'queued', limit: 20 });
-        var otherCalls = ringingCalls.concat(queuedCalls).filter(function (c) {
-          return c.sid !== agentCallSid && c.url && c.url.indexOf(conferenceName) !== -1;
-        });
-        log('info', 'CANCELLING_OTHERS', { count: otherCalls.length, via: 'rest_api_fallback' });
-        for (var j = 0; j < otherCalls.length; j++) {
-          try {
-            await client.calls(otherCalls[j].sid).update({ status: 'completed' });
-            log('info', 'CANCELLED_CALL', { cancelledSid: otherCalls[j].sid });
-          } catch (cancelErr2) {
-            log('warn', 'CANCEL_FAILED', { cancelledSid: otherCalls[j].sid, message: cancelErr2.message });
-          }
-        }
-      }
-    } catch (restCancelErr) {
-      log('warn', 'CANCEL_BATCH_ERROR', { message: restCancelErr.message });
-    }
-  }
+  if (!cancelledViaSyncOk) log('warn', 'SIBLING_CANCELLATION_UNAVAILABLE', {});
 
   // ── Post "agent on call" to callback dashboard ──────────────────
   var callbackUrl = (context.CALLBACK_SCRIPT_URL || '').trim();
@@ -214,7 +226,8 @@ exports.handler = async function (context, event, callback) {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(postBody)
+            'Content-Length': Buffer.byteLength(postBody),
+            'x-call-routing-secret': (context.CALL_ROUTING_SECRET || '').trim()
           },
           timeout: 5000
         }, function (res) {

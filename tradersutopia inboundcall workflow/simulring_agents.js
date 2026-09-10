@@ -78,7 +78,10 @@ async function loadCallRouting(context, calledNumber, log) {
 
 exports.handler = async function (context, event, callback) {
   // ── RAW EVENT DUMP (diagnostic — check Twilio Live Logs) ───────────
-  console.log("RAW_EVENT=" + JSON.stringify(event));
+  // Studio may wrap form fields in body; parse all fields together.
+  var raw = typeof event.body === 'string' ? event.body : typeof event.Body === 'string' ? event.Body : '';
+  if (raw) event = Object.assign({}, Object.fromEntries(new URLSearchParams(raw)), event);
+  else if (event.body && typeof event.body === 'object') event = Object.assign({}, event.body, event);
   console.log("DOMAIN=" + context.DOMAIN_NAME);
 
   // ── Correlation & logging ──────────────────────────────────────────
@@ -108,6 +111,10 @@ exports.handler = async function (context, event, callback) {
   console.log("PARSED_conferenceName=" + conferenceName);
 
   var callerCallSid = (event.callerCallSid || event.callSid || event.CallSid || '').trim();
+  if (!callerCallSid) {
+    var sidMatch = /^TU_(CA[0-9a-fA-F]{32})(?:_|$)/.exec(conferenceName);
+    if (sidMatch) callerCallSid = sidMatch[1];
+  }
   var callerNumber = (event.callerNumber || event.From || event.Caller || '').trim();
   var calledNumber = (event.calledNumber || event.To || event.Called || '').trim();
   var correlation = {
@@ -148,11 +155,15 @@ exports.handler = async function (context, event, callback) {
   }
 
   // ── Agent list (env-configurable, comma-separated) ─────────────────
-  if ((!callerNumber || !calledNumber) && callerCallSid) {
+  if (callerCallSid) {
     try {
       var callerCall = await context.getTwilioClient().calls(callerCallSid).fetch();
-      if (!callerNumber) callerNumber = (callerCall.from || '').trim();
-      if (!calledNumber) calledNumber = (callerCall.to || '').trim();
+      if (['completed', 'busy', 'failed', 'no-answer', 'canceled'].indexOf(callerCall.status) !== -1) {
+        log('info', 'CALLER_ALREADY_ENDED', {});
+        return callback(null, { ok: true, attempted: 0, succeeded: 0, callSids: [] });
+      }
+      callerNumber = (callerCall.from || '').trim();
+      calledNumber = (callerCall.to || '').trim();
       correlation.callerNumber = callerNumber;
       correlation.calledNumber = calledNumber;
       log('info', 'CALLER_LOOKUP_OK', { callerCallSid: callerCallSid });
@@ -162,6 +173,10 @@ exports.handler = async function (context, event, callback) {
         message: lookupError.message
       });
     }
+  }
+
+  if (!/^\+[1-9]\d{7,14}$/.test(calledNumber)) {
+    return callback(new Error('Cannot determine the inbound line for routing'));
   }
 
   var routing = await loadCallRouting(context, calledNumber, log);
@@ -324,7 +339,7 @@ exports.handler = async function (context, event, callback) {
       })
     );
 
-    results.forEach(function (result, idx) {
+    await Promise.all(results.map(async function (result, idx) {
       var agentNumber = availableAgents[idx];
       if (result.status === 'fulfilled') {
         succeeded++;
@@ -333,12 +348,20 @@ exports.handler = async function (context, event, callback) {
         log('info', 'CALL_CREATED', { agentNumber: agentNumber, agentCallSid: sid });
       } else {
         failed++;
+        if (syncSid) {
+          try {
+            var failedClaim = await client.sync.v1.services(syncSid).syncMaps(SYNC_MAP).syncMapItems(agentNumber).fetch();
+            if (failedClaim.data.conferenceName === conferenceName) {
+              await client.sync.v1.services(syncSid).syncMaps(SYNC_MAP).syncMapItems(agentNumber).remove();
+            }
+          } catch (releaseError) { log('warn', 'FAILED_CLAIM_RELEASE', { message: releaseError.message }); }
+        }
         log('error', 'CALL_FAILED', {
           agentNumber: agentNumber,
           message: result.reason ? result.reason.message : String(result.reason)
         });
       }
-    });
+    }));
   } catch (err) {
     log('error', 'OUTBOUND_BATCH_ERROR', { message: err.message, stack: err.stack });
     return callback(null, {

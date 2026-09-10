@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateAccessCode } from "@/lib/access";
-import { fetchRecordingAudio } from "@/lib/twilio";
+import { loadRecordingAudio, recordingResponse } from "@/lib/recording-media";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 120;
 
 export async function GET(
   req: NextRequest,
@@ -21,19 +22,13 @@ export async function GET(
     }
 
     const { sid } = await params;
-    const audio = await fetchRecordingAudio(sid, req.headers.get("range"));
-    const headers = new Headers({
-      "Content-Type": audio.contentType,
-      "Cache-Control": "private, no-store",
-      "Accept-Ranges": "bytes",
-    });
-    if (audio.contentLength) headers.set("Content-Length", audio.contentLength);
-    if (audio.contentRange) headers.set("Content-Range", audio.contentRange);
-
-    return new NextResponse(audio.body, { status: audio.status, headers });
+    const audio = await loadRecordingAudio(sid);
+    return recordingResponse(audio, req.headers.get("range"), req.method === "HEAD");
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[GET /api/recordings/[sid]/media] Error:", message);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }
+
+export const HEAD = GET;

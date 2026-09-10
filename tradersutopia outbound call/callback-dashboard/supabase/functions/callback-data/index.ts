@@ -138,6 +138,19 @@ async function routingConfig(): Promise<JsonRecord> {
 }
 
 async function handle(action: string, payload: JsonRecord): Promise<unknown> {
+  if (action === "inbound.record") {
+    const result = await db.rpc("callback_record_inbound", {
+      p_call_sid: text(payload.callSid),
+      p_phone: phone(payload.phone),
+      p_called_number: phone(payload.calledNumber),
+      p_started_at: timestamp(payload.startedAt),
+      p_ended_at: timestamp(payload.endedAt),
+      p_answered_at: timestamp(payload.answeredAt),
+    });
+    fail(result.error);
+    return { recorded: true };
+  }
+
   if (action === "health") {
     const result = await db.from("callback_leads").select("id", { count: "exact", head: true });
     fail(result.error);
