@@ -281,7 +281,7 @@ exports.handler = async function (context, event, callback) {
   log('info', 'JOINING_CONFERENCE', { conferenceName: conferenceName });
 
   var baseUrl = (context.BASE_URL || ('https://' + context.DOMAIN_NAME)).replace(/\/+$/, '');
-  var statusCallbackUrl = baseUrl + '/conference_status_callback';
+  var statusCallbackUrl = baseUrl + '/conference_status_callback#rc=2&rp=ct,rt,5xx&rt=5000';
 
   var dial = twiml.dial();
   dial.conference(

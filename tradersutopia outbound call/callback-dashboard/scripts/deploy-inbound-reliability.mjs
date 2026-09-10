@@ -1,6 +1,6 @@
 import nextEnv from "@next/env";
 import twilio from "twilio";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -23,16 +23,19 @@ const replacements = new Map([
   ["/agent_whisper_accept", "agent_whisper_accept.js"],
   ["/conference_status_callback", "conference_status_callback.js"],
   ["/agent_call_status", "agent_call_status.js"],
+  ["/join_conference", "join_conference.js"],
 ]);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const workflow = path.resolve(here, "../../../tradersutopia inboundcall workflow");
 const client = twilio(accountSid, authToken);
+const expectedBuild = process.argv.find(value => value.startsWith("--expected-build="))?.split("=")[1];
+if (!expectedBuild) throw new Error("Supply --expected-build=<current Twilio build SID> before deploying");
 
 async function upload(item, filename) {
   const content = await readFile(path.join(workflow, filename), "utf8");
   const form = new FormData();
   form.set("Path", item.path);
-  form.set("Visibility", item.visibility);
+  form.set("Visibility", "protected");
   form.set("Content", new Blob([content], { type: "application/javascript" }), "index.js");
   const response = await fetch(
     `https://serverless-upload.twilio.com/v1/Services/${serviceSid}/Functions/${item.function_sid}/Versions`,
@@ -49,7 +52,27 @@ async function upload(item, filename) {
 }
 
 const environment = await client.serverless.v1.services(serviceSid).environments(environmentSid).fetch();
+if (environment.buildSid !== expectedBuild) throw new Error("Twilio changed since review; inspect the current build first");
+await client.sync.v1.services(syncServiceSid).fetch();
+const health = await fetch(appUrl + "/api/inbound-status", { method: "POST", body: "" });
+if (health.status !== 403) throw new Error("Deploy and verify the new dashboard endpoint before changing Twilio");
 const current = await client.serverless.v1.services(serviceSid).builds(environment.buildSid).fetch();
+const flow = await client.studio.v2.flows(flowSid).fetch();
+const numbers = await client.incomingPhoneNumbers.list({ limit: 100 });
+const targets = inboundNumbers.map(number => {
+  const target = numbers.find(item => item.phoneNumber === number);
+  if (!target || !target.voiceUrl?.includes(flowSid)) throw new Error(`Unexpected voice flow on ${number}`);
+  return target;
+});
+await mkdir(".vercel/investigation", { recursive: true });
+await writeFile(".vercel/investigation/twilio-reliability-before.json", JSON.stringify({
+  buildSid: current.sid,
+  flow: { sid: flow.sid, revision: flow.revision, definition: flow.definition },
+  numbers: targets.map(item => ({ sid: item.sid, statusCallback: item.statusCallback, statusCallbackMethod: item.statusCallbackMethod })),
+}, null, 2));
+for (const target of replacements.keys()) {
+  if (!current.functionVersions.some(item => item.path === target)) throw new Error(`Missing function ${target}`);
+}
 const versions = [];
 for (const item of current.functionVersions) {
   const filename = replacements.get(item.path);
@@ -69,6 +92,8 @@ for (let attempt = 0; attempt < 60; attempt++) {
   await new Promise(resolve => setTimeout(resolve, 2000));
 }
 if (ready.status !== "completed") throw new Error(`Twilio build ${build.sid} timed out`);
+const latest = await client.serverless.v1.services(serviceSid).environments(environmentSid).fetch();
+if (latest.buildSid !== expectedBuild) throw new Error("Another Twilio deployment occurred during the build");
 const deployment = await client.serverless.v1.services(serviceSid).environments(environmentSid)
   .deployments.create({ buildSid: build.sid });
 
@@ -79,20 +104,23 @@ if (!syncVariable) throw new Error("SYNC_SERVICE_SID is missing");
 await client.serverless.v1.services(serviceSid).environments(environmentSid)
   .variables(syncVariable.sid).update({ value: syncServiceSid });
 
-const numbers = await client.incomingPhoneNumbers.list({ limit: 100 });
-for (const number of inboundNumbers) {
-  const target = numbers.find(item => item.phoneNumber === number);
-  if (!target) throw new Error(`Twilio number not found: ${number}`);
-  if (!target.voiceUrl.includes(flowSid)) throw new Error(`Unexpected voice flow on ${number}: ${target.voiceUrl}`);
+for (const target of targets) {
   await client.incomingPhoneNumbers(target.sid).update({
     statusCallback: statusUrl,
     statusCallbackMethod: "POST",
   });
-  console.log(`${number}: inbound status tracking enabled`);
+  console.log(`${target.phoneNumber}: inbound status tracking enabled`);
 }
 
-const flow = await client.studio.v2.flows(flowSid).fetch();
 const definition = structuredClone(flow.definition);
+const latestFlow = await client.studio.v2.flows(flowSid).fetch();
+if (latestFlow.revision !== flow.revision) throw new Error("Studio changed during deployment; review the flow before publishing");
+const ringState = definition.states.find(state => state.name === "simulring_agents");
+if (ringState) {
+  ringState.properties.add_twilio_auth = true;
+  ringState.transitions = ringState.transitions.map(transition => transition.event === "failed"
+    ? { ...transition, next: "redirect_to_conference" } : transition);
+}
 const sayState = definition.states.find(state => state.name === "say_play_1");
 if (sayState) sayState.transitions = [{ event: "audioComplete" }];
 // The terminal number callback is authoritative, so the old Google Sheets

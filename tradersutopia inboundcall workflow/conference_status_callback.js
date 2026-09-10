@@ -5,9 +5,8 @@
  * RETURNS:     empty 200 (Twilio ignores the response body)
  *
  * PURPOSE:
- *   Log every conference lifecycle event so mid-call disconnects are
- *   traceable.  This function does NOT affect call behavior — it is
- *   purely observability.
+ *   Persist actual agent joins and caller departures for missed-call
+ *   classification, log lifecycle events, and release ended agent claims.
  *
  * EVENTS RECEIVED (configured via statusCallbackEvent on <Conference>):
  *   participant-join, participant-leave, conference-end,

@@ -118,6 +118,7 @@ test('accepted agent lease survives calls longer than five minutes',async()=>{
   s.items.set(conf,{data:{callSids:[agentSid],agents:['+15550000002']}});
   const result=await s.run('agent_whisper_accept',{conferenceName:conf,Digits:'1',CallSid:agentSid,To:'+15550000002'});
   assert.match(result.toString(),/<Conference/);
+  assert.match(result.toString(),/conference_status_callback#rc=2&amp;rp=ct,rt,5xx&amp;rt=5000/);
   assert.equal(s.items.get('+15550000002').ttl,14400);
   assert.equal(s.items.get('+15550000002').data.callSid,agentSid);
 });
@@ -134,4 +135,11 @@ test('failed outcome delivery retries and returns an error',async()=>{
   const s=setup({postStatus:500});
   await assert.rejects(s.run('conference_status_callback',{FriendlyName:conf,StatusCallbackEvent:'participant-leave',CallSid:callerSid},{CALLBACK_SCRIPT_URL:'https://example.com/api/twilio-data'}));
   assert.equal(s.posts.length,2);
+});
+
+test('caller conference requests transport retries for outcome callbacks',async()=>{
+  const s=setup();
+  const result=await s.run('join_conference',{conferenceName:conf,CallSid:callerSid,From:'+15550000001',To:'+18444844459'});
+  assert.match(result.toString(),/conference_status_callback#rc=2&amp;rp=ct,rt,5xx&amp;rt=5000/);
+  assert.match(result.toString(),/record="record-from-start"/);
 });

@@ -116,7 +116,7 @@ exports.handler = function (context, event, callback) {
     startedAt: startedAt
   });
 
-  var statusCallbackUrl = baseUrl + '/conference_status_callback';
+  var statusCallbackUrl = baseUrl + '/conference_status_callback#rc=2&rp=ct,rt,5xx&rt=5000';
   var recordingStatusCallbackUrl = (context.RECORDING_STATUS_CALLBACK_URL || '').trim();
   var conferenceOptions = {
     startConferenceOnEnter: true,
